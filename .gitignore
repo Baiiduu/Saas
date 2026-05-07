@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+*.log
+.DS_Store
+coverage/
+uploads/
+.pnpm-store/
+.pnpm-cache/
+.pnpm-state/
+.pnpm-global/
+.pnpm-global-bin/

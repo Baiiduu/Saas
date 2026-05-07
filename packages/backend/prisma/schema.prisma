@@ -1,0 +1,761 @@
+// ── Complete Prisma Schema ──────────────────────────────────
+// Multi-tenant SaaS collaboration platform
+// ────────────────────────────────────────────────────────────
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["public", "tenant"]
+}
+
+// ── Enums ───────────────────────────────────────────────────
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  CLOSED
+
+  @@schema("public")
+}
+
+enum Priority {
+  URGENT
+  HIGH
+  MEDIUM
+  LOW
+
+  @@schema("public")
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  LEADER
+  MEMBER
+  READER
+  GUEST
+
+  @@schema("public")
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELED
+
+  @@schema("public")
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  COMMENT_MENTION
+  APPROVAL_NEEDED
+  APPROVAL_RESULT
+  DOCUMENT_SHARED
+  MEMBER_JOINED
+  TEAM_INVITE
+  MILESTONE_DUE
+
+  @@schema("public")
+}
+
+enum ResourceType {
+  GIT_REPO
+  S3_BUCKET
+  FILE
+
+  @@schema("public")
+}
+
+enum TeamVisibility {
+  PUBLIC
+  PRIVATE
+
+  @@schema("public")
+}
+
+enum DocumentType {
+  FILE
+  FOLDER
+
+  @@schema("public")
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  FILE
+  SYSTEM
+
+  @@schema("public")
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  DISABLED
+
+  @@schema("public")
+}
+
+// ══════════════════════════════════════════════════════════════
+//  PUBLIC SCHEMA MODELS (@@schema("public"))
+// ══════════════════════════════════════════════════════════════
+
+model User {
+  id             String     @id @default(uuid()) @db.Uuid
+  email          String     @unique
+  phone          String?
+  displayName    String     @map("display_name")
+  avatar         String?
+  passwordHash   String     @map("password_hash")
+  status         UserStatus @default(PENDING)
+  activationCode String?    @map("activation_code")
+  loginAttempts  Int        @default(0) @map("login_attempts")
+  lockedUntil    DateTime?  @map("locked_until")
+  lastLoginAt    DateTime?  @map("last_login_at")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+  deletedAt      DateTime?  @map("deleted_at")
+
+  // Relations
+  ownedTenants    Tenant[]
+  tenantMembers   TenantMember[]
+  teamMemberships TeamMember[]
+  createdTeams    Team[]           @relation("TeamCreator")
+  createdTasks    Task[]           @relation("TaskCreator")
+  taskAssignments TaskAssignee[]
+  createdDocs     Document[]
+  docShares       DocShare[]
+  approvalTemplates ApprovalTemplate[]
+  approvalActions ApprovalAction[]
+  comments        Comment[]
+  notifications   Notification[]
+  milestones      Milestone[]
+  resourceRepos   ResourceRepo[]
+  resourceLinks   ResourceLink[]
+  auditLogs       AuditLog[]
+  approvals       Approval[]
+  sentMessages    Message[]        @relation("MessageSender")
+  messageReads    MessageRead[]
+
+  @@schema("public")
+  @@map("users")
+}
+
+model Tenant {
+  id         String    @id @default(uuid()) @db.Uuid
+  name       String
+  schemaName String    @unique @map("schema_name") @db.VarChar(63)
+  slug       String    @unique @map("slug") @db.VarChar(100)
+  industry   String?
+  scale      String?
+  logo       String?
+  status     String    @default("active") @map("status") @db.VarChar(20)
+  ownerId    String    @map("owner_id") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  // Relations
+  owner  User            @relation(fields: [ownerId], references: [id])
+  members TenantMember[]
+
+  @@schema("public")
+  @@index([ownerId])
+  @@map("tenants")
+}
+
+model TenantMember {
+  id       String   @id @default(uuid()) @db.Uuid
+  userId   String   @map("user_id") @db.Uuid
+  tenantId String   @map("tenant_id") @db.Uuid
+  role     Role
+  joinedAt DateTime @default(now()) @map("joined_at")
+
+  // Relations
+  user   User   @relation(fields: [userId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([userId])
+  @@index([tenantId])
+  @@schema("public")
+  @@unique([userId, tenantId])
+  @@map("tenant_members")
+}
+
+// ══════════════════════════════════════════════════════════════
+//  TENANT-SCOPED MODELS (will be moved to tenant schema)
+// ══════════════════════════════════════════════════════════════
+
+// ── Team ────────────────────────────────────────────────────
+
+model Team {
+  id          String        @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  visibility  TeamVisibility @default(PRIVATE)
+  isArchived  Boolean       @default(false) @map("is_archived")
+  createdBy   String        @map("created_by") @db.Uuid
+  tenantId    String        @map("tenant_id") @db.Uuid
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+  deletedAt   DateTime?     @map("deleted_at")
+
+  // Relations
+  creator      User          @relation("TeamCreator", fields: [createdBy], references: [id])
+  members      TeamMember[]
+  tasks        Task[]
+  boardColumns BoardColumn[]
+  documents    Document[]
+  approvalTemplates ApprovalTemplate[]
+  approvals    Approval[]
+  milestones   Milestone[]
+  resourceRepos ResourceRepo[]
+  messages     Message[]
+
+  @@schema("tenant")
+  @@index([tenantId])
+  @@unique([name, tenantId])
+  @@map("teams")
+}
+
+model TeamMember {
+  id      String   @id @default(uuid()) @db.Uuid
+  teamId  String   @map("team_id") @db.Uuid
+  userId  String   @map("user_id") @db.Uuid
+  role    Role
+  joinedAt DateTime @default(now()) @map("joined_at")
+
+  // Relations
+  team Team @relation(fields: [teamId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@schema("tenant")
+  @@index([teamId])
+  @@index([userId])
+  @@unique([teamId, userId])
+  @@map("team_members")
+}
+
+// ── Task ────────────────────────────────────────────────────
+
+model Task {
+  id           String     @id @default(uuid()) @db.Uuid
+  title        String
+  description  String?
+  status       TaskStatus @default(TODO)
+  priority     Priority   @default(MEDIUM)
+  parentTaskId String?    @map("parent_task_id") @db.Uuid
+  dueDate      DateTime?  @map("due_date")
+  sortOrder    Int        @default(0) @map("sort_order")
+  teamId       String     @map("team_id") @db.Uuid
+  creatorId    String     @map("creator_id") @db.Uuid
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  deletedAt    DateTime?  @map("deleted_at")
+
+  // Relations
+  parentTask       Task?            @relation("TaskHierarchy", fields: [parentTaskId], references: [id])
+  subTasks         Task[]           @relation("TaskHierarchy")
+  team             Team             @relation(fields: [teamId], references: [id])
+  creator          User             @relation("TaskCreator", fields: [creatorId], references: [id])
+  assignees        TaskAssignee[]
+  tags             TaskTag[]
+  taskRelations    TaskRelation[]   @relation("TaskRelationSource")
+  relatedFrom      TaskRelation[]   @relation("TaskRelationTarget")
+  milestoneTasks   MilestoneTask[]
+
+  @@schema("tenant")
+  @@index([teamId])
+  @@index([parentTaskId])
+  @@index([creatorId])
+  @@index([status])
+  @@index([sortOrder])
+  @@index([teamId, status])
+  @@index([teamId, sortOrder])
+  @@map("tasks")
+}
+
+model TaskAssignee {
+  id         String   @id @default(uuid()) @db.Uuid
+  taskId     String   @map("task_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  assignedAt DateTime @default(now()) @map("assigned_at")
+
+  // Relations
+  task Task @relation(fields: [taskId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@schema("tenant")
+  @@index([taskId])
+  @@index([userId])
+  @@unique([taskId, userId])
+  @@map("task_assignees")
+}
+
+model TaskTag {
+  id     String @id @default(uuid()) @db.Uuid
+  taskId String @map("task_id") @db.Uuid
+  name   String
+
+  // Relations
+  task Task @relation(fields: [taskId], references: [id])
+
+  @@schema("tenant")
+  @@index([taskId])
+  @@index([taskId, name])
+  @@map("task_tags")
+}
+
+model TaskRelation {
+  id               String  @id @default(uuid()) @db.Uuid
+  taskId           String  @map("task_id") @db.Uuid
+  relatedTaskId    String? @map("related_task_id") @db.Uuid
+  relatedDocId     String? @map("related_doc_id") @db.Uuid
+  relatedResourceId String? @map("related_resource_id") @db.Uuid
+  relationType     String  @map("relation_type")
+
+  // Relations
+  task          Task           @relation("TaskRelationSource", fields: [taskId], references: [id])
+  relatedTask   Task?          @relation("TaskRelationTarget", fields: [relatedTaskId], references: [id])
+  relatedDoc    Document?      @relation(fields: [relatedDocId], references: [id])
+  relatedResource ResourceItem? @relation(fields: [relatedResourceId], references: [id])
+
+  @@schema("tenant")
+  @@index([taskId])
+  @@index([relatedTaskId])
+  @@index([relatedDocId])
+  @@index([relatedResourceId])
+  @@map("task_relations")
+}
+
+// ── BoardColumn ─────────────────────────────────────────────
+
+model BoardColumn {
+  id           String     @id @default(uuid()) @db.Uuid
+  teamId       String     @map("team_id") @db.Uuid
+  name         String
+  statusMapping TaskStatus @map("status_mapping")
+  color        String?
+  sortOrder    Int        @default(0) @map("sort_order")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  // Relations
+  team Team @relation(fields: [teamId], references: [id])
+
+  @@schema("tenant")
+  @@index([teamId])
+  @@index([sortOrder])
+  @@map("board_columns")
+}
+
+// ── Document ────────────────────────────────────────────────
+
+model Document {
+  id        String       @id @default(uuid()) @db.Uuid
+  name      String
+  type      DocumentType @default(FILE)
+  content   String?
+  fileUrl   String?      @map("file_url")
+  fileSize  Int?         @map("file_size")
+  mimeType  String?      @map("mime_type")
+  parentId  String?      @map("parent_id") @db.Uuid
+  teamId    String       @map("team_id") @db.Uuid
+  creatorId String       @map("creator_id") @db.Uuid
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+  deletedAt DateTime?    @map("deleted_at")
+
+  // Relations
+  parent    Document?     @relation("DocumentHierarchy", fields: [parentId], references: [id])
+  children  Document[]    @relation("DocumentHierarchy")
+  team      Team          @relation(fields: [teamId], references: [id])
+  creator   User          @relation(fields: [creatorId], references: [id])
+  versions  DocVersion[]
+  shares    DocShare[]
+  taskRelations TaskRelation[]
+
+  @@schema("tenant")
+  @@index([teamId])
+  @@index([creatorId])
+  @@index([parentId])
+  @@map("documents")
+}
+
+model DocVersion {
+  id            String   @id @default(uuid()) @db.Uuid
+  documentId    String   @map("document_id") @db.Uuid
+  versionNumber Int      @map("version_number")
+  fileUrl       String   @map("file_url")
+  fileSize      Int      @map("file_size")
+  mimeType      String?  @map("mime_type")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  document Document @relation(fields: [documentId], references: [id])
+
+  @@schema("tenant")
+  @@index([documentId])
+  @@unique([documentId, versionNumber])
+  @@map("doc_versions")
+}
+
+model DocShare {
+  id          String   @id @default(uuid()) @db.Uuid
+  documentId  String   @map("document_id") @db.Uuid
+  shareToken  String   @unique @map("share_token")
+  permission  String
+  accessCode  String?  @map("access_code")
+  expiresAt   DateTime? @map("expires_at")
+  createdBy   String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relations
+  document Document @relation(fields: [documentId], references: [id])
+  creator  User     @relation(fields: [createdBy], references: [id])
+
+  @@schema("tenant")
+  @@index([documentId])
+  @@map("doc_shares")
+}
+
+// ── Approval ────────────────────────────────────────────────
+
+model ApprovalTemplate {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  scope       String
+  formFields  Json     @map("form_fields") @db.JsonB
+  teamId      String   @map("team_id") @db.Uuid
+  createdBy   String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  // Relations
+  team   Team           @relation(fields: [teamId], references: [id])
+  creator User          @relation(fields: [createdBy], references: [id])
+  nodes  ApprovalNode[]
+  approvals Approval[]
+
+  @@schema("tenant")
+  @@index([teamId])
+  @@index([createdBy])
+  @@map("approval_templates")
+}
+
+model ApprovalNode {
+  id           String   @id @default(uuid()) @db.Uuid
+  templateId   String   @map("template_id") @db.Uuid
+  name         String
+  approverType String   @map("approver_type")
+  sortOrder    Int      @default(0) @map("sort_order")
+  config       Json     @default("{}") @db.JsonB
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relations
+  template    ApprovalTemplate  @relation(fields: [templateId], references: [id])
+  actions     ApprovalAction[]
+
+  @@schema("tenant")
+  @@index([templateId])
+  @@index([sortOrder])
+  @@map("approval_nodes")
+}
+
+model Approval {
+  id              String         @id @default(uuid()) @db.Uuid
+  templateId      String         @map("template_id") @db.Uuid
+  formData        Json           @map("form_data") @db.JsonB
+  status          ApprovalStatus @default(PENDING)
+  currentSortOrder Int?          @map("current_sort_order")
+  teamId          String         @map("team_id") @db.Uuid
+  creatorId       String         @map("creator_id") @db.Uuid
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+  deletedAt       DateTime?      @map("deleted_at")
+
+  // Relations
+  template ApprovalTemplate @relation(fields: [templateId], references: [id])
+  team     Team             @relation(fields: [teamId], references: [id])
+  creator  User             @relation(fields: [creatorId], references: [id])
+  actions  ApprovalAction[]
+
+  @@schema("tenant")
+  @@index([templateId])
+  @@index([teamId])
+  @@index([creatorId])
+  @@index([status])
+  @@map("approvals")
+}
+
+model ApprovalAction {
+  id          String     @id @default(uuid()) @db.Uuid
+  approvalId  String     @map("approval_id") @db.Uuid
+  nodeId      String     @map("node_id") @db.Uuid
+  action      String
+  comment     String?
+  processorId String     @map("processor_id") @db.Uuid
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  // Relations
+  approval  Approval      @relation(fields: [approvalId], references: [id])
+  node      ApprovalNode  @relation(fields: [nodeId], references: [id])
+  processor User          @relation(fields: [processorId], references: [id])
+
+  @@schema("tenant")
+  @@index([approvalId])
+  @@index([nodeId])
+  @@index([processorId])
+  @@map("approval_actions")
+}
+
+// ── Comment ─────────────────────────────────────────────────
+
+model Comment {
+  id           String    @id @default(uuid()) @db.Uuid
+  content      String
+  parentId     String?   @map("parent_id") @db.Uuid
+  resourceType String    @map("resource_type")
+  resourceId   String    @map("resource_id") @db.Uuid
+  isEdited     Boolean   @default(false) @map("is_edited")
+  creatorId    String    @map("creator_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  // Relations
+  parent  Comment? @relation("CommentHierarchy", fields: [parentId], references: [id])
+  replies Comment[] @relation("CommentHierarchy")
+  creator User     @relation(fields: [creatorId], references: [id])
+
+  @@schema("tenant")
+  @@index([resourceType, resourceId])
+  @@index([parentId])
+  @@index([creatorId])
+  @@map("comments")
+}
+
+// ── Notification ────────────────────────────────────────────
+
+model Notification {
+  id           String           @id @default(uuid()) @db.Uuid
+  type         NotificationType
+  title        String
+  content      String?
+  resourceType String?          @map("resource_type")
+  resourceId   String?          @map("resource_id") @db.Uuid
+  userId       String           @map("user_id") @db.Uuid
+  isRead       Boolean          @default(false) @map("is_read")
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+
+  @@schema("tenant")
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+// ── Milestone ───────────────────────────────────────────────
+
+model Milestone {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  dueDate     DateTime @map("due_date")
+  status      String   @default("pending")
+  progress    Int      @default(0)
+  teamId      String   @map("team_id") @db.Uuid
+  createdBy   String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  // Relations
+  team  Team           @relation(fields: [teamId], references: [id])
+  creator User         @relation(fields: [createdBy], references: [id])
+  tasks  MilestoneTask[]
+
+  @@schema("tenant")
+  @@index([teamId])
+  @@index([createdBy])
+  @@map("milestones")
+}
+
+model MilestoneTask {
+  id          String   @id @default(uuid()) @db.Uuid
+  milestoneId String   @map("milestone_id") @db.Uuid
+  taskId      String   @map("task_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relations
+  milestone Milestone @relation(fields: [milestoneId], references: [id])
+  task      Task      @relation(fields: [taskId], references: [id])
+
+  @@schema("tenant")
+  @@index([milestoneId])
+  @@index([taskId])
+  @@unique([milestoneId, taskId])
+  @@map("milestone_tasks")
+}
+
+// ── Resource Repo / Items / Links ───────────────────────────
+
+model ResourceRepo {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  type      String
+  config    Json     @default("{}") @db.JsonB
+  teamId    String   @map("team_id") @db.Uuid
+  createdBy String   @map("created_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  // Relations
+  team  Team           @relation(fields: [teamId], references: [id])
+  creator User         @relation(fields: [createdBy], references: [id])
+  items  ResourceItem[]
+
+  @@schema("tenant")
+  @@index([teamId])
+  @@index([createdBy])
+  @@map("resource_repos")
+}
+
+model ResourceItem {
+  id        String   @id @default(uuid()) @db.Uuid
+  repoId    String   @map("repo_id") @db.Uuid
+  path      String
+  name      String
+  type      String
+  meta      Json      @default("{}") @db.JsonB
+  createdAt DateTime  @default(now()) @map("created_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  // Relations
+  repo    ResourceRepo      @relation(fields: [repoId], references: [id])
+  links   ResourceLink[]
+  taskRelations TaskRelation[]
+
+  @@schema("tenant")
+  @@index([repoId])
+  @@index([path])
+  @@map("resource_items")
+}
+
+model ResourceLink {
+  id             String   @id @default(uuid()) @db.Uuid
+  resourceItemId String   @map("resource_item_id") @db.Uuid
+  targetType     String   @map("target_type")
+  targetId       String   @map("target_id") @db.Uuid
+  createdBy      String   @map("created_by") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  // Relations
+  resourceItem ResourceItem @relation(fields: [resourceItemId], references: [id])
+  creator      User         @relation(fields: [createdBy], references: [id])
+
+  @@schema("tenant")
+  @@index([resourceItemId])
+  @@index([targetType, targetId])
+  @@map("resource_links")
+}
+
+// ── AuditLog ────────────────────────────────────────────────
+
+model AuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  action       String
+  resourceType String   @map("resource_type")
+  resourceId   String   @map("resource_id") @db.Uuid
+  detail       Json?    @db.JsonB
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
+  tenantId     String   @map("tenant_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+
+  @@schema("tenant")
+  @@index([tenantId])
+  @@index([userId])
+  @@index([action])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ── GraphEdge ───────────────────────────────────────────────
+
+model GraphEdge {
+  id           String   @id @default(uuid()) @db.Uuid
+  sourceType   String   @map("source_type")
+  sourceId     String   @map("source_id") @db.Uuid
+  targetType   String   @map("target_type")
+  targetId     String   @map("target_id") @db.Uuid
+  relationType String   @map("relation_type")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@schema("tenant")
+  @@index([sourceType, sourceId])
+  @@index([targetType, targetId])
+  @@unique([sourceType, sourceId, targetType, targetId, relationType])
+  @@map("graph_edges")
+}
+
+// ── Message ─────────────────────────────────────────────────
+
+model Message {
+  id        String      @id @default(uuid()) @db.Uuid
+  teamId    String      @map("team_id") @db.Uuid
+  senderId  String      @map("sender_id") @db.Uuid
+  content   String
+  type      MessageType @default(TEXT)
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  team   Team          @relation(fields: [teamId], references: [id])
+  sender User          @relation("MessageSender", fields: [senderId], references: [id])
+  reads  MessageRead[]
+
+  @@schema("tenant")
+  @@index([teamId])
+  @@index([senderId])
+  @@index([createdAt])
+  @@index([teamId, createdAt])
+  @@map("messages")
+}
+
+model MessageRead {
+  id        String   @id @default(uuid()) @db.Uuid
+  messageId String   @map("message_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  readAt    DateTime @default(now()) @map("read_at")
+
+  // Relations
+  message Message @relation(fields: [messageId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@schema("tenant")
+  @@index([messageId])
+  @@index([userId])
+  @@unique([messageId, userId])
+  @@map("message_reads")
+}

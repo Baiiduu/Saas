@@ -1,0 +1,26 @@
+{
+  "name": "saas-collaboration-platform",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "clean": "pnpm -r clean",
+    "dev:restart": "powershell -ExecutionPolicy Bypass -File ./scripts/start-dev.ps1",
+    "dev:stop": "powershell -ExecutionPolicy Bypass -File ./scripts/stop-dev.ps1"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@nestjs/core",
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild"
+    ]
+  }
+}

@@ -1,0 +1,76 @@
+/* Ant Design 5 specific overrides using CSS variables */
+
+.ant-layout {
+  min-height: 100vh;
+}
+
+.ant-layout-header {
+  height: var(--header-height);
+  line-height: var(--header-height);
+  padding: 0 var(--spacing-lg);
+  background: var(--color-bg-container);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.ant-layout-sider {
+  background: var(--color-bg-container);
+  border-right: 1px solid var(--color-border);
+}
+
+.ant-layout-content {
+  padding: var(--spacing-lg);
+  background: var(--color-bg-secondary);
+}
+
+/* Table overrides for consistent spacing */
+.ant-table-wrapper .ant-table-thead > tr > th {
+  background: var(--color-bg-secondary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.ant-table-wrapper .ant-table-tbody > tr > td {
+  transition: background var(--transition-fast);
+}
+
+.ant-table-wrapper .ant-table-tbody > tr:hover > td {
+  background: var(--color-primary-bg);
+}
+
+/* Card overrides */
+.ant-card {
+  border-radius: var(--radius-lg);
+}
+
+.ant-card .ant-card-head {
+  border-bottom: 1px solid var(--color-border);
+  min-height: 48px;
+}
+
+/* Button overrides for consistent sizing */
+.ant-btn {
+  border-radius: var(--radius-md);
+}
+
+/* Form overrides */
+.ant-form-item {
+  margin-bottom: var(--spacing-md);
+}
+
+/* Modal overrides */
+.ant-modal-content {
+  border-radius: var(--radius-lg);
+}
+
+.ant-modal-header {
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+/* Dropdown overrides */
+.ant-dropdown-menu {
+  border-radius: var(--radius-md);
+}
+
+/* Page header consistent spacing */
+.ant-page-header {
+  padding: var(--spacing-md) var(--spacing-lg);
+}
