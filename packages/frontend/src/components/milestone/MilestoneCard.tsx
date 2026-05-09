@@ -12,6 +12,8 @@ const { Text } = Typography;
 
 const statusConfig: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
   active: { color: 'processing', icon: <ClockCircleOutlined />, label: '进行中' },
+  pending: { color: 'default', icon: <ClockCircleOutlined />, label: '待开始' },
+  in_progress: { color: 'processing', icon: <ClockCircleOutlined />, label: '进行中' },
   completed: { color: 'success', icon: <CheckCircleOutlined />, label: '已完成' },
   overdue: { color: 'error', icon: <ClockCircleOutlined />, label: '已逾期' },
 };

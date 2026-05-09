@@ -61,6 +61,7 @@ const ApprovalListPage: React.FC = () => {
     activeTab === TAB_ALL ? undefined : (activeTab as ApprovalStatus);
 
   const { data, isLoading, isError, error } = useApprovals({
+    teamId,
     status: statusFilter,
     page: pagination.page,
     limit: pagination.limit,
@@ -79,7 +80,7 @@ const ApprovalListPage: React.FC = () => {
     const lower = searchText.toLowerCase();
     return approvals.filter(
       (a) =>
-        a.title.toLowerCase().includes(lower) ||
+        (a.title || '').toLowerCase().includes(lower) ||
         a.creatorId?.toLowerCase().includes(lower)
     );
   }, [approvals, searchText]);
@@ -99,7 +100,7 @@ const ApprovalListPage: React.FC = () => {
               )
             }
           >
-            {title}
+            {title || (record as IApproval & { template?: { name?: string } }).template?.name || '审批详情'}
           </a>
         ),
       },
@@ -116,10 +117,19 @@ const ApprovalListPage: React.FC = () => {
       },
       {
         title: '创建人',
-        dataIndex: 'creatorId',
         key: 'creatorId',
         width: 120,
         ellipsis: true,
+        render: (_: unknown, record: IApproval & { creator?: { displayName?: string; email?: string } }) =>
+          record.creator?.displayName || record.creator?.email || record.creatorId,
+      },
+      {
+        title: '模板',
+        key: 'template',
+        width: 140,
+        ellipsis: true,
+        render: (_: unknown, record: IApproval & { template?: { name?: string } }) =>
+          record.template?.name || record.templateId,
       },
       {
         title: '创建时间',

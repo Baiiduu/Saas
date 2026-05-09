@@ -6,18 +6,10 @@ import {
   SkillDefinition,
   SkillExecutionRequest,
   SkillExecutionResult,
-  MCPToolExecutionRequest,
 } from '../mcp/mcp.protocol';
 
 /**
- * SummarySkill — generates a summary of a task or project state.
- *
- * Tool chain:
- *   1. "task.get" — fetch the task detail
- *   2. "task.list" — fetch sub-tasks / related tasks
- *   3. "comment.list" — fetch comments for context
- *
- * The skill combines these into a natural-language summary.
+ * SummarySkill — generates a cross-resource summary for the current team context.
  */
 @Injectable()
 export class SummarySkill extends BaseSkill {
@@ -25,10 +17,10 @@ export class SummarySkill extends BaseSkill {
 
   readonly definition: SkillDefinition = {
     id: 'summary',
-    name: 'Task Summary',
-    description: 'Generate a natural-language summary of a task including its status, assignees, comments, and subtasks.',
-    requiredPermission: 'task:read',
-    toolChain: ['task.get', 'task.list', 'comment.list'],
+    name: 'Summary',
+    description: 'Summarise task, document, and approval activity for the current team context.',
+    requiredPermission: 'llm.read',
+    toolChain: ['task.list', 'document.list', 'approval.list'],
   };
 
   async execute(
@@ -36,99 +28,173 @@ export class SummarySkill extends BaseSkill {
     toolRegistry: MCPToolRegistry,
   ): Promise<SkillExecutionResult> {
     const steps: SkillExecutionResult['steps'] = [];
-    const { taskId } = request.args as { taskId?: string };
+    const teamId = (request.args.teamId as string | undefined) ?? request.teamId;
+    const limit = (request.args.limit as number | undefined) ?? 8;
 
-    if (!taskId) {
+    if (!teamId) {
       return {
         skillId: request.skillId,
         success: false,
-        error: 'Missing required argument: taskId',
+        error: 'Missing required argument: teamId',
+        status: 'failed',
         steps: [],
       };
     }
 
-    // Step 1: Fetch task detail
     const taskResult = await toolRegistry.execute({
-      toolId: 'task.get',
-      args: { taskId },
+      toolId: 'task.list',
+      args: { teamId, limit },
       userId: request.userId,
       tenantId: request.tenantId,
-      teamId: request.teamId,
+      teamId,
+      sessionId: request.sessionId,
+      skillRunId: request.skillRunId,
     });
     steps.push({
-      toolId: 'task.get',
+      toolId: 'task.list',
       success: taskResult.success,
+      status: taskResult.status,
       result: taskResult.data,
       error: taskResult.error,
+      toolCallId: taskResult.toolCallId,
+      requiresConfirmation: taskResult.requiresConfirmation,
+      confirmationToken: taskResult.confirmationToken,
     });
 
-    if (!taskResult.success) {
-      return { skillId: request.skillId, success: false, error: taskResult.error, steps };
+    if (taskResult.status === 'pending_confirmation') {
+      return {
+        skillId: request.skillId,
+        success: false,
+        status: 'pending_confirmation',
+        requiresConfirmation: true,
+        confirmationToken: taskResult.confirmationToken,
+        steps,
+      };
     }
 
-    const task = taskResult.data as Record<string, unknown>;
-
-    // Step 2: Fetch related tasks
-    const relatedResult = await toolRegistry.execute({
-      toolId: 'task.list',
-      args: { parentTaskId: taskId, limit: 10 },
+    const documentResult = await toolRegistry.execute({
+      toolId: 'document.list',
+      args: { teamId },
       userId: request.userId,
       tenantId: request.tenantId,
-      teamId: request.teamId,
+      teamId,
+      sessionId: request.sessionId,
+      skillRunId: request.skillRunId,
     });
     steps.push({
-      toolId: 'task.list',
-      success: relatedResult.success,
-      result: relatedResult.data,
-      error: relatedResult.error,
+      toolId: 'document.list',
+      success: documentResult.success,
+      status: documentResult.status,
+      result: documentResult.data,
+      error: documentResult.error,
+      toolCallId: documentResult.toolCallId,
+      requiresConfirmation: documentResult.requiresConfirmation,
+      confirmationToken: documentResult.confirmationToken,
     });
 
-    // Step 3: Fetch comments
-    const commentResult = await toolRegistry.execute({
-      toolId: 'comment.list',
-      args: { resourceType: 'task', resourceId: taskId },
+    if (documentResult.status === 'pending_confirmation') {
+      return {
+        skillId: request.skillId,
+        success: false,
+        status: 'pending_confirmation',
+        requiresConfirmation: true,
+        confirmationToken: documentResult.confirmationToken,
+        steps,
+      };
+    }
+
+    const approvalResult = await toolRegistry.execute({
+      toolId: 'approval.list',
+      args: { teamId, limit },
       userId: request.userId,
       tenantId: request.tenantId,
-      teamId: request.teamId,
+      teamId,
+      sessionId: request.sessionId,
+      skillRunId: request.skillRunId,
     });
     steps.push({
-      toolId: 'comment.list',
-      success: commentResult.success,
-      result: commentResult.data,
-      error: commentResult.error,
+      toolId: 'approval.list',
+      success: approvalResult.success,
+      status: approvalResult.status,
+      result: approvalResult.data,
+      error: approvalResult.error,
+      toolCallId: approvalResult.toolCallId,
+      requiresConfirmation: approvalResult.requiresConfirmation,
+      confirmationToken: approvalResult.confirmationToken,
     });
 
-    // Build the summary text
-    const title = (task.title as string) || 'Untitled';
-    const status = (task.status as string) || 'unknown';
-    const comments = commentResult.success
-      ? (commentResult.data as Array<Record<string, unknown>>) ?? []
-      : [];
-    const related = relatedResult.success
-      ? (relatedResult.data as { items?: Array<unknown> })?.items ?? []
-      : [];
+    if (approvalResult.status === 'pending_confirmation') {
+      return {
+        skillId: request.skillId,
+        success: false,
+        status: 'pending_confirmation',
+        requiresConfirmation: true,
+        confirmationToken: approvalResult.confirmationToken,
+        steps,
+      };
+    }
+
+    if (!taskResult.success || !documentResult.success || !approvalResult.success) {
+      return {
+        skillId: request.skillId,
+        success: false,
+        error:
+          taskResult.error ??
+          documentResult.error ??
+          approvalResult.error ??
+          'Summary skill failed',
+        status: 'failed',
+        steps,
+      };
+    }
+
+    const tasks = ((taskResult.data as { items?: Array<Record<string, unknown>> })?.items ?? []);
+    const documents = (documentResult.data as Array<Record<string, unknown>> | undefined) ?? [];
+    const approvals = ((approvalResult.data as { items?: Array<Record<string, unknown>> })?.items ?? []);
 
     const summary = [
-      `## Summary: ${title}`,
-      `**Status:** ${status}`,
-      `**Sub-tasks:** ${related.length}`,
-      `**Comments:** ${comments.length}`,
+      `团队 ${teamId} 当前协作概览：`,
+      `- 任务数（本次采样）：${tasks.length}`,
+      `- 文档数（当前目录层级）：${documents.length}`,
+      `- 审批数（本次采样）：${approvals.length}`,
       '',
-      comments.length > 0
-        ? '### Recent Comments:\n' +
-          comments
-            .slice(0, 5)
-            .map((c) => `- ${(c.content as string)?.substring(0, 100)}`)
-            .join('\n')
-        : 'No comments yet.',
+      tasks.length > 0
+        ? '任务重点：' +
+          tasks
+            .slice(0, 3)
+            .map((task) => `${String(task.title ?? '未命名')}(${String(task.status ?? 'UNKNOWN')})`)
+            .join('，')
+        : '任务重点：暂无任务数据',
+      documents.length > 0
+        ? '文档重点：' +
+          documents
+            .slice(0, 3)
+            .map((document) => String(document.name ?? '未命名'))
+            .join('，')
+        : '文档重点：暂无文档数据',
+      approvals.length > 0
+        ? '审批重点：' +
+          approvals
+            .slice(0, 3)
+            .map((approval) => String(approval.title ?? approval.id ?? '未命名审批'))
+            .join('，')
+        : '审批重点：暂无审批数据',
     ].join('\n');
 
-    this.logger.log(`Summary generated for task ${taskId}`);
+    this.logger.log(`Summary generated for team ${teamId}`);
 
     return {
       skillId: request.skillId,
       success: true,
-      data: { summary, task, relatedTasksCount: related.length, commentsCount: comments.length },
+      status: 'completed',
+      data: {
+        summary,
+        counts: {
+          tasks: tasks.length,
+          documents: documents.length,
+          approvals: approvals.length,
+        },
+      },
       steps,
     };
   }

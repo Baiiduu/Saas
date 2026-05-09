@@ -7,6 +7,8 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { RbacService } from '../rbac/rbac.service';
+import { AuditService } from '../audit/audit.service';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { ShareDocumentDto } from './dto/share-document.dto';
 import { CreateVersionDto } from './dto/create-version.dto';
@@ -51,12 +53,83 @@ export class DocumentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly rbacService: RbacService,
+    private readonly auditService: AuditService,
   ) {}
+
+  /**
+   * Create a text-first draft document for AI-assisted authoring.
+   */
+  async createDraft(
+    userId: string,
+    tenantId: string,
+    dto: {
+      name: string;
+      teamId: string;
+      parentId?: string | null;
+      content?: string;
+      mimeType?: string;
+    },
+  ) {
+    await this.rbacService.assertPermission('document.create', userId, tenantId, {
+      teamId: dto.teamId,
+    });
+
+    if (dto.parentId) {
+      const parent = await this.prisma.document.findUnique({
+        where: { id: dto.parentId },
+        select: { id: true, type: true, deletedAt: true },
+      });
+
+      if (!parent || parent.deletedAt) {
+        throw new NotFoundException('Parent folder not found');
+      }
+
+      if (parent.type !== 'FOLDER') {
+        throw new BadRequestException('Parent must be a folder');
+      }
+    }
+
+    const document = await this.prisma.document.create({
+      data: {
+        name: dto.name,
+        type: 'FILE',
+        teamId: dto.teamId,
+        parentId: dto.parentId ?? null,
+        creatorId: userId,
+        content: dto.content ?? '',
+        mimeType: dto.mimeType ?? 'text/markdown',
+        fileSize: dto.content ? Buffer.byteLength(dto.content, 'utf-8') : 0,
+      },
+      include: {
+        creator: {
+          select: { id: true, displayName: true, avatar: true },
+        },
+      },
+    });
+
+    await this.prisma.docVersion.create({
+      data: {
+        documentId: document.id,
+        versionNumber: 1,
+        fileUrl: '',
+        fileSize: document.fileSize ?? 0,
+        mimeType: document.mimeType,
+      },
+    });
+
+    this.logger.log(`Draft document "${document.name}" (${document.id}) created by user ${userId}`);
+    return document;
+  }
 
   /**
    * Create a folder in the document tree.
    */
-  async createFolder(userId: string, dto: CreateDocumentDto) {
+  async createFolder(userId: string, tenantId: string, dto: CreateDocumentDto) {
+    await this.rbacService.assertPermission('document.create', userId, tenantId, {
+      teamId: dto.teamId,
+    });
+
     // Ensure parent exists if provided
     if (dto.parentId) {
       const parent = await this.prisma.document.findUnique({
@@ -97,9 +170,14 @@ export class DocumentService {
    */
   async uploadFile(
     userId: string,
+    tenantId: string,
     file: UploadedFile,
     dto: CreateDocumentDto,
   ) {
+    await this.rbacService.assertPermission('document.create', userId, tenantId, {
+      teamId: dto.teamId,
+    });
+
     if (!file) {
       throw new BadRequestException('File is required');
     }
@@ -189,7 +267,16 @@ export class DocumentService {
    * Get the document/folder tree for a team.
    * Returns top-level items (parentId = null) with nested children.
    */
-  async getTree(teamId: string, parentId?: string | null): Promise<DocumentTreeNode[]> {
+  async getTree(
+    userId: string,
+    tenantId: string,
+    teamId: string,
+    parentId?: string | null,
+  ): Promise<DocumentTreeNode[]> {
+    await this.rbacService.assertPermission('document.read', userId, tenantId, {
+      teamId,
+    });
+
     const where: Record<string, unknown> = {
       teamId,
       deletedAt: null,
@@ -222,7 +309,7 @@ export class DocumentService {
       const enriched: DocumentTreeNode[] = await Promise.all(
         items.map(async (item) => {
           if (item.type === 'FOLDER') {
-            const children = await this.getTree(teamId, item.id);
+            const children = await this.getTree(userId, tenantId, teamId, item.id);
             return { ...item, children };
           }
           return item as DocumentTreeNode;
@@ -241,7 +328,20 @@ export class DocumentService {
   /**
    * Find a document by ID.
    */
-  async findById(docId: string) {
+  async findById(
+    userId: string,
+    tenantId: string,
+    docId: string,
+    shareToken?: string,
+    accessCode?: string,
+  ) {
+    await this.rbacService.assertPermission('document.read', userId, tenantId, {
+      resourceId: docId,
+      allowDocumentShare: !!shareToken,
+      shareToken,
+      accessCode,
+    });
+
     const doc = await this.prisma.document.findUnique({
       where: { id: docId },
       include: {
@@ -261,8 +361,18 @@ export class DocumentService {
   /**
    * Update document metadata (name, parentId).
    */
-  async update(docId: string, userId: string, data: { name?: string; parentId?: string | null }) {
-    const doc = await this.findOwnedDocument(docId, userId);
+  async update(
+    docId: string,
+    userId: string,
+    tenantId: string,
+    data: { name?: string; parentId?: string | null },
+  ) {
+    await this.rbacService.assertPermission('document.update', userId, tenantId, {
+      resourceId: docId,
+      ownership: 'creator',
+    });
+
+    const doc = await this.findOwnedDocument(docId, userId, tenantId);
 
     // If changing parent, validate parent exists and is a folder
     if (data.parentId !== undefined && data.parentId !== null) {
@@ -300,8 +410,12 @@ export class DocumentService {
   /**
    * Soft-delete a document. Only the creator can delete.
    */
-  async delete(docId: string, userId: string) {
-    const doc = await this.findOwnedDocument(docId, userId);
+  async delete(docId: string, userId: string, tenantId: string) {
+    await this.rbacService.assertPermission('document.delete', userId, tenantId, {
+      resourceId: docId,
+    });
+
+    const doc = await this.findOwnedDocument(docId, userId, tenantId);
 
     // If deleting a folder, also soft-delete all nested children recursively
     if (doc.type === 'FOLDER') {
@@ -331,9 +445,13 @@ export class DocumentService {
   /**
    * Generate a share link for a document.
    */
-  async createShare(docId: string, userId: string, dto: ShareDocumentDto) {
-    // Verify document exists and user is the owner
-    const doc = await this.findOwnedDocument(docId, userId);
+  async createShare(docId: string, userId: string, tenantId: string, dto: ShareDocumentDto) {
+    await this.rbacService.assertPermission('document.share', userId, tenantId, {
+      resourceId: docId,
+      ownership: 'creator',
+    });
+
+    const doc = await this.findOwnedDocument(docId, userId, tenantId);
 
     const shareToken = crypto.randomUUID();
 
@@ -358,6 +476,21 @@ export class DocumentService {
     );
 
     const baseUrl = process.env.FRONTEND_URL || '';
+
+    await this.auditService.append({
+      userId,
+      action: 'document.share.create',
+      resourceType: 'document',
+      resourceId: docId,
+      tenantId,
+      detail: {
+        shareId: share.id,
+        permission: dto.permission,
+        accessCodeProtected: Boolean(dto.accessCode),
+        expiresAt: dto.expiresAt ?? null,
+      },
+    });
+
     return {
       ...share,
       url: `${baseUrl}/share/${shareToken}`,
@@ -412,13 +545,33 @@ export class DocumentService {
    * Save rich-text content (HTML/Markdown) for a document.
    * Only the document creator can save content.
    */
-  async saveContent(docId: string, userId: string, content: string) {
-    // Verify ownership (throws if not found, deleted, or wrong owner)
-    await this.findOwnedDocument(docId, userId);
+  async saveContent(
+    docId: string,
+    userId: string,
+    tenantId: string,
+    content: string,
+    shareToken?: string,
+    accessCode?: string,
+  ) {
+    await this.rbacService.assertPermission('document.update', userId, tenantId, {
+      resourceId: docId,
+      allowDocumentShare: !!shareToken,
+      shareToken,
+      accessCode,
+    });
+
+    const doc = await this.prisma.document.findUnique({
+      where: { id: docId },
+      select: { id: true, deletedAt: true },
+    });
+
+    if (!doc || doc.deletedAt) {
+      throw new NotFoundException('Document not found');
+    }
 
     const updated = await this.prisma.document.update({
       where: { id: docId },
-      data: { content },
+      data: { content: content ?? '' },
       include: {
         creator: {
           select: { id: true, displayName: true, avatar: true },
@@ -430,11 +583,34 @@ export class DocumentService {
     return updated;
   }
 
+  async assertCanEditContent(docId: string, userId: string, tenantId: string) {
+    await this.rbacService.assertPermission('document.update', userId, tenantId, {
+      resourceId: docId,
+    });
+
+    const doc = await this.prisma.document.findUnique({
+      where: { id: docId },
+      select: { id: true, teamId: true, deletedAt: true },
+    });
+
+    if (!doc || doc.deletedAt) {
+      throw new NotFoundException('Document not found');
+    }
+
+    return doc;
+  }
+
   /**
    * Get a document's content (for the rich-text editor).
    */
-  async getContent(docId: string) {
-    const doc = await this.findById(docId);
+  async getContent(
+    userId: string,
+    tenantId: string,
+    docId: string,
+    shareToken?: string,
+    accessCode?: string,
+  ) {
+    const doc = await this.findById(userId, tenantId, docId, shareToken, accessCode);
     
     // If content is empty but file is a text type, try to read from stored file
     if (!doc.content && doc.fileUrl && doc.mimeType && doc.mimeType.startsWith('text/')) {
@@ -479,8 +655,14 @@ export class DocumentService {
    *   - text/* → render as plain text
    *   - other → unknown fallback
    */
-  async preview(docId: string) {
-    const doc = await this.findById(docId);
+  async preview(
+    userId: string,
+    tenantId: string,
+    docId: string,
+    shareToken?: string,
+    accessCode?: string,
+  ) {
+    const doc = await this.findById(userId, tenantId, docId, shareToken, accessCode);
 
     if (doc.type === 'FOLDER') {
       throw new BadRequestException('Cannot preview a folder');
@@ -528,8 +710,14 @@ export class DocumentService {
   /**
    * List all versions for a document.
    */
-  async listVersions(docId: string) {
-    const doc = await this.findById(docId);
+  async listVersions(
+    userId: string,
+    tenantId: string,
+    docId: string,
+    shareToken?: string,
+    accessCode?: string,
+  ) {
+    const doc = await this.findById(userId, tenantId, docId, shareToken, accessCode);
     return this.prisma.docVersion.findMany({
       where: { documentId: doc.id },
       orderBy: { versionNumber: 'desc' },
@@ -539,8 +727,15 @@ export class DocumentService {
   /**
    * Get a specific version by ID.
    */
-  async getVersion(docId: string, versionId: string) {
-    const doc = await this.findById(docId);
+  async getVersion(
+    userId: string,
+    tenantId: string,
+    docId: string,
+    versionId: string,
+    shareToken?: string,
+    accessCode?: string,
+  ) {
+    const doc = await this.findById(userId, tenantId, docId, shareToken, accessCode);
     const version = await this.prisma.docVersion.findFirst({
       where: { id: versionId, documentId: doc.id },
     });
@@ -553,8 +748,13 @@ export class DocumentService {
   /**
    * Create a new version snapshot of the current document content.
    */
-  async createVersion(docId: string, userId: string, dto?: CreateVersionDto) {
-    const doc = await this.findOwnedDocument(docId, userId);
+  async createVersion(docId: string, userId: string, tenantId: string, dto?: CreateVersionDto) {
+    await this.rbacService.assertPermission('document.update', userId, tenantId, {
+      resourceId: docId,
+      ownership: 'creator',
+    });
+
+    const doc = await this.findOwnedDocument(docId, userId, tenantId);
 
     // Find the latest version number
     const latest = await this.prisma.docVersion.findFirst({
@@ -585,8 +785,13 @@ export class DocumentService {
    * Rollback a document to a specific version.
    * Restores the fileUrl and fileSize from the target version.
    */
-  async rollbackToVersion(docId: string, versionId: string, userId: string) {
-    await this.findOwnedDocument(docId, userId);
+  async rollbackToVersion(docId: string, versionId: string, userId: string, tenantId: string) {
+    await this.rbacService.assertPermission('document.update', userId, tenantId, {
+      resourceId: docId,
+      ownership: 'creator',
+    });
+
+    await this.findOwnedDocument(docId, userId, tenantId);
 
     const version = await this.prisma.docVersion.findFirst({
       where: { id: versionId, documentId: docId },
@@ -643,8 +848,13 @@ export class DocumentService {
   /**
    * Delete a specific version.
    */
-  async deleteVersion(docId: string, versionId: string, userId: string) {
-    await this.findOwnedDocument(docId, userId);
+  async deleteVersion(docId: string, versionId: string, userId: string, tenantId: string) {
+    await this.rbacService.assertPermission('document.update', userId, tenantId, {
+      resourceId: docId,
+      ownership: 'creator',
+    });
+
+    await this.findOwnedDocument(docId, userId, tenantId);
 
     const version = await this.prisma.docVersion.findFirst({
       where: { id: versionId, documentId: docId },
@@ -676,8 +886,14 @@ export class DocumentService {
    * Resolve the file path and metadata for binary file serving.
    * Used by the GET :docId/file endpoint.
    */
-  async getFile(docId: string) {
-    const doc = await this.findById(docId);
+  async getFile(
+    userId: string,
+    tenantId: string,
+    docId: string,
+    shareToken?: string,
+    accessCode?: string,
+  ) {
+    const doc = await this.findById(userId, tenantId, docId, shareToken, accessCode);
 
     if (doc.type === 'FOLDER') {
       throw new BadRequestException('Cannot get file for a folder');
@@ -701,7 +917,7 @@ export class DocumentService {
   /**
    * Find a document and verify the requesting user is its creator.
    */
-  private async findOwnedDocument(docId: string, userId: string) {
+  private async findOwnedDocument(docId: string, userId: string, tenantId: string) {
     const doc = await this.prisma.document.findUnique({
       where: { id: docId },
       select: {
@@ -718,6 +934,11 @@ export class DocumentService {
     if (!doc || doc.deletedAt) {
       throw new NotFoundException('Document not found');
     }
+
+    await this.rbacService.assertPermission('document.update', userId, tenantId, {
+      resourceId: docId,
+      ownership: 'creator',
+    });
 
     if (doc.creatorId !== userId) {
       throw new ForbiddenException('You can only modify your own documents');

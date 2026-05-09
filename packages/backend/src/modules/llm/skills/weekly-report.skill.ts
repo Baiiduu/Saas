@@ -10,13 +10,6 @@ import {
 
 /**
  * WeeklyReportSkill — generates a weekly report for a team.
- *
- * Tool chain:
- *   1. "task.list" — fetch tasks completed in the week
- *   2. "dashboard.teamStats" — fetch team stats
- *   3. "milestone.list" — fetch milestone progress
- *
- * The skill consolidates this data into a structured weekly report.
  */
 @Injectable()
 export class WeeklyReportSkill extends BaseSkill {
@@ -25,9 +18,9 @@ export class WeeklyReportSkill extends BaseSkill {
   readonly definition: SkillDefinition = {
     id: 'weekly-report',
     name: 'Weekly Report',
-    description: 'Generate a structured weekly report for a team including task completion, milestones, and team stats.',
-    requiredPermission: 'report:read',
-    toolChain: ['task.list', 'dashboard.teamStats', 'milestone.list'],
+    description: 'Generate a structured weekly report using tasks, milestones, and team members.',
+    requiredPermission: 'llm.read',
+    toolChain: ['task.list', 'milestone.list', 'team.member.list'],
   };
 
   async execute(
@@ -35,13 +28,14 @@ export class WeeklyReportSkill extends BaseSkill {
     toolRegistry: MCPToolRegistry,
   ): Promise<SkillExecutionResult> {
     const steps: SkillExecutionResult['steps'] = [];
-    const { teamId } = request.args as { teamId?: string };
+    const teamId = (request.args.teamId as string | undefined) ?? request.teamId;
 
     if (!teamId) {
       return {
         skillId: request.skillId,
         success: false,
         error: 'Missing required argument: teamId',
+        status: 'failed',
         steps: [],
       };
     }
@@ -54,64 +48,124 @@ export class WeeklyReportSkill extends BaseSkill {
     const endOfWeek = new Date(startOfWeek);
     endOfWeek.setDate(startOfWeek.getDate() + 7);
 
-    // Step 1: Fetch completed tasks this week
     const tasksResult = await toolRegistry.execute({
       toolId: 'task.list',
       args: {
         teamId,
-        status: 'DONE',
-        updatedAtFrom: startOfWeek.toISOString(),
-        updatedAtTo: endOfWeek.toISOString(),
         limit: 100,
       },
       userId: request.userId,
       tenantId: request.tenantId,
       teamId,
+      sessionId: request.sessionId,
+      skillRunId: request.skillRunId,
     });
     steps.push({
       toolId: 'task.list',
       success: tasksResult.success,
+      status: tasksResult.status,
       result: tasksResult.data,
       error: tasksResult.error,
+      toolCallId: tasksResult.toolCallId,
+      requiresConfirmation: tasksResult.requiresConfirmation,
+      confirmationToken: tasksResult.confirmationToken,
     });
 
-    // Step 2: Fetch team stats
-    const statsResult = await toolRegistry.execute({
-      toolId: 'dashboard.teamStats',
-      args: { teamId },
-      userId: request.userId,
-      tenantId: request.tenantId,
-      teamId,
-    });
-    steps.push({
-      toolId: 'dashboard.teamStats',
-      success: statsResult.success,
-      result: statsResult.data,
-      error: statsResult.error,
-    });
+    if (tasksResult.status === 'pending_confirmation') {
+      return {
+        skillId: request.skillId,
+        success: false,
+        status: 'pending_confirmation',
+        requiresConfirmation: true,
+        confirmationToken: tasksResult.confirmationToken,
+        steps,
+      };
+    }
 
-    // Step 3: Fetch milestones
     const milestonesResult = await toolRegistry.execute({
       toolId: 'milestone.list',
       args: { teamId, limit: 20 },
       userId: request.userId,
       tenantId: request.tenantId,
       teamId,
+      sessionId: request.sessionId,
+      skillRunId: request.skillRunId,
     });
     steps.push({
       toolId: 'milestone.list',
       success: milestonesResult.success,
+      status: milestonesResult.status,
       result: milestonesResult.data,
       error: milestonesResult.error,
+      toolCallId: milestonesResult.toolCallId,
+      requiresConfirmation: milestonesResult.requiresConfirmation,
+      confirmationToken: milestonesResult.confirmationToken,
     });
 
-    // Build the report
+    if (milestonesResult.status === 'pending_confirmation') {
+      return {
+        skillId: request.skillId,
+        success: false,
+        status: 'pending_confirmation',
+        requiresConfirmation: true,
+        confirmationToken: milestonesResult.confirmationToken,
+        steps,
+      };
+    }
+
+    const membersResult = await toolRegistry.execute({
+      toolId: 'team.member.list',
+      args: { teamId },
+      userId: request.userId,
+      tenantId: request.tenantId,
+      teamId,
+      sessionId: request.sessionId,
+      skillRunId: request.skillRunId,
+    });
+    steps.push({
+      toolId: 'team.member.list',
+      success: membersResult.success,
+      status: membersResult.status,
+      result: membersResult.data,
+      error: membersResult.error,
+      toolCallId: membersResult.toolCallId,
+      requiresConfirmation: membersResult.requiresConfirmation,
+      confirmationToken: membersResult.confirmationToken,
+    });
+
+    if (membersResult.status === 'pending_confirmation') {
+      return {
+        skillId: request.skillId,
+        success: false,
+        status: 'pending_confirmation',
+        requiresConfirmation: true,
+        confirmationToken: membersResult.confirmationToken,
+        steps,
+      };
+    }
+
+    if (!tasksResult.success || !milestonesResult.success || !membersResult.success) {
+      return {
+        skillId: request.skillId,
+        success: false,
+        error:
+          tasksResult.error ??
+          milestonesResult.error ??
+          membersResult.error ??
+          'Weekly report skill failed',
+        status: 'failed',
+        steps,
+      };
+    }
+
     const completedTasks = tasksResult.success
       ? (tasksResult.data as { items?: Array<unknown> })?.items ?? []
       : [];
-    const stats = statsResult.success ? (statsResult.data as Record<string, unknown>) : null;
     const milestones = milestonesResult.success
       ? (milestonesResult.data as { items?: Array<unknown> })?.items ?? []
+      : [];
+    const members = membersResult.success
+      ? (membersResult.data as Array<Record<string, unknown>>) ?? []
       : [];
 
     const report = [
@@ -119,19 +173,17 @@ export class WeeklyReportSkill extends BaseSkill {
       `**Period:** ${startOfWeek.toLocaleDateString()} — ${endOfWeek.toLocaleDateString()}`,
       '',
       '## Summary',
-      `- Tasks completed this week: ${completedTasks.length}`,
-      `- Total tasks: ${(stats?.totalTasks as string) ?? 'N/A'}`,
-      `- Completion rate: ${(stats?.completionRate as string) ?? 'N/A'}%`,
-      `- Overdue tasks: ${(stats?.overdueTasks as string) ?? 'N/A'}`,
+      `- Sampled tasks in team: ${completedTasks.length}`,
       `- Active milestones: ${milestones.length}`,
+      `- Active members: ${members.length}`,
       '',
       completedTasks.length > 0
-        ? '## Completed Tasks\n' +
+        ? '## Task Focus\n' +
           (completedTasks as Array<Record<string, unknown>>)
             .slice(0, 20)
-            .map((t: Record<string, unknown>) => `- ${t.title as string}`)
+            .map((t: Record<string, unknown>) => `- ${String(t.title ?? '未命名任务')} [${String(t.status ?? 'UNKNOWN')}]`)
             .join('\n')
-        : 'No tasks were completed this week.',
+        : 'No task data available this week.',
     ].join('\n');
 
     this.logger.log(`Weekly report generated for team ${teamId}`);
@@ -139,11 +191,12 @@ export class WeeklyReportSkill extends BaseSkill {
     return {
       skillId: request.skillId,
       success: true,
+      status: 'completed',
       data: {
         report,
         period: { start: startOfWeek.toISOString(), end: endOfWeek.toISOString() },
-        completedTasks: completedTasks.length,
-        stats,
+        sampledTasks: completedTasks.length,
+        members: members.length,
         milestones: milestones.length,
       },
       steps,

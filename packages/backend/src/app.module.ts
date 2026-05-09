@@ -89,7 +89,7 @@ import llmConfig from './modules/llm/config/llm.config';
     JwtModule.register({
       global: true,
       secret: process.env.JWT_SECRET || 'dev-secret-do-not-use-in-production',
-      signOptions: { expiresIn: process.env.JWT_EXPIRATION || '15m' },
+      signOptions: { expiresIn: process.env.JWT_EXPIRATION || '1d' },
     }),
   ],
   providers: [

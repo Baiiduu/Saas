@@ -1,0 +1,4 @@
+interface:
+  display_name: "需求规格写作"
+  short_description: "将高层需求、模块能力细化为正式规格文档与需求表格结构"
+  default_prompt: "Use $requirements-spec-writing to draft or refine a formal requirements specification document in Chinese."

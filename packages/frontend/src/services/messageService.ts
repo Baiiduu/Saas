@@ -16,6 +16,11 @@ export interface SendMessageData {
   content: string;
   type?: MessageType;
   replyToId?: string;
+  references?: Array<{
+    type: 'task' | 'doc';
+    resourceId: string;
+    label?: string;
+  }>;
 }
 
 export function getMessages(

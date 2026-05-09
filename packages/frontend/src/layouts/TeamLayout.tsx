@@ -66,7 +66,7 @@ const teamMenuItems = [
   {
     key: 'graph',
     icon: <ApartmentOutlined />,
-    label: '资源关系',
+    label: '资源画布',
   },
   {
     key: 'members',

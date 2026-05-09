@@ -1,5 +1,13 @@
+import { useQuery } from '@tanstack/react-query';
+import { useParams } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
-import { canPerformOperation, getAllowedOperations } from '@/utils/permission';
+import { useWorkspaceStore } from '@/stores/workspaceStore';
+import { get } from '@/services/api';
+import {
+  canPerformOperation,
+  getAllowedOperations,
+  normalizePermission,
+} from '@/utils/permission';
 import type { Role } from '@saas/shared-types';
 
 export interface PermissionCheck {
@@ -8,6 +16,7 @@ export interface PermissionCheck {
   canAny: (operations: string[]) => boolean;
   role: Role | null;
   isAuthenticated: boolean;
+  isLoading: boolean;
   allowedOperations: string[];
 }
 
@@ -21,16 +30,46 @@ export interface PermissionCheck {
  *   const { can, canAll, canAny, role } = usePermission();
  *   if (can('task.create')) { ... }
  *   if (canAny(['task.create', 'task.update'])) { ... }
- *   if (canAll(['task.view', 'comment.create'])) { ... }
+ *   if (canAll(['task.read', 'comment.create'])) { ... }
  */
 export function usePermission(): PermissionCheck {
+  const { teamId: routeTeamId } = useParams<{ teamId?: string }>();
+  const user = useAuthStore((state) => state.user);
   const role = useAuthStore((state) => state.role);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const currentTenant = useWorkspaceStore((state) => state.currentTenant);
+  const currentTeam = useWorkspaceStore((state) => state.currentTeam);
+
+  const effectiveTeamId = routeTeamId || currentTeam?.id;
+
+  const permissionQuery = useQuery({
+    queryKey: ['rbac-permissions', user?.id, currentTenant?.id, effectiveTeamId],
+    queryFn: () =>
+      get<{ userId: string; permissions: Record<string, boolean> }>(
+        `/rbac/permissions/${user!.id}`,
+        {
+          params: effectiveTeamId ? { teamId: effectiveTeamId } : undefined,
+        }
+      ),
+    enabled: isAuthenticated && !!user?.id && !!currentTenant?.id,
+    staleTime: 30_000,
+    retry: 1,
+  });
 
   const can = (operation: string): boolean => {
     if (!isAuthenticated || !role) {
       return false;
     }
+
+    const normalizedOperation = normalizePermission(operation);
+    const resolvedPermissions = permissionQuery.data?.permissions;
+
+    if (resolvedPermissions) {
+      return Boolean(
+        resolvedPermissions[normalizedOperation] ?? resolvedPermissions[operation]
+      );
+    }
+
     return canPerformOperation(role as Role, operation);
   };
 
@@ -42,7 +81,14 @@ export function usePermission(): PermissionCheck {
     return operations.some(can);
   };
 
-  const allowedOperations = isAuthenticated && role ? getAllowedOperations(role as Role) : [];
+  const allowedOperations =
+    permissionQuery.data?.permissions
+      ? Object.entries(permissionQuery.data.permissions)
+          .filter(([, allowed]) => allowed)
+          .map(([operation]) => operation)
+      : isAuthenticated && role
+        ? getAllowedOperations(role as Role)
+        : [];
 
   return {
     can,
@@ -50,6 +96,7 @@ export function usePermission(): PermissionCheck {
     canAny,
     role: role as Role | null,
     isAuthenticated,
+    isLoading: permissionQuery.isLoading,
     allowedOperations,
   };
 }
@@ -70,9 +117,9 @@ export function usePermissionGuard(requiredOperations: string[]): {
   hasAccess: boolean;
   isLoading: boolean;
 } {
-  const { canAll } = usePermission();
+  const { canAll, isLoading } = usePermission();
   return {
     hasAccess: canAll(requiredOperations),
-    isLoading: false,
+    isLoading,
   };
 }

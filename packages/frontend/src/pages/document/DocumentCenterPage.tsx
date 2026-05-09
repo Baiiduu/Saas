@@ -17,7 +17,6 @@ import {
 } from 'antd';
 import {
   FolderOutlined,
-  FolderOpenOutlined,
   FileOutlined,
   PlusOutlined,
   UploadOutlined,
@@ -28,6 +27,8 @@ import {
   EyeOutlined,
   InboxOutlined,
   SearchOutlined,
+  HomeOutlined,
+  ArrowLeftOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { DataNode } from 'antd/es/tree';
@@ -49,6 +50,10 @@ import ShareDialog from '@/components/document/ShareDialog';
 const { Sider, Content } = Layout;
 const { Title, Text } = Typography;
 
+type DocumentTreeItem = IDocument & {
+  children?: DocumentTreeItem[];
+};
+
 function formatFileSize(bytes?: number): string {
   if (!bytes) return '-';
   if (bytes < 1024) return `${bytes} B`;
@@ -57,8 +62,8 @@ function formatFileSize(bytes?: number): string {
 }
 
 function buildTreeData(docs: IDocument[]): DataNode[] {
-  const childrenMap: Record<string, IDocument[]> = {};
-  const roots: IDocument[] = [];
+  const childrenMap: Record<string, DocumentTreeItem[]> = {};
+  const roots: DocumentTreeItem[] = [];
 
   docs.forEach((doc) => {
     if (doc.type === DocumentType.FOLDER) {
@@ -71,7 +76,7 @@ function buildTreeData(docs: IDocument[]): DataNode[] {
     }
   });
 
-  function buildNode(folder: IDocument): DataNode {
+  function buildNode(folder: DocumentTreeItem): DataNode {
     const children = childrenMap[folder.id] || [];
     return {
       key: folder.id,
@@ -83,6 +88,36 @@ function buildTreeData(docs: IDocument[]): DataNode[] {
   }
 
   return roots.map(buildNode);
+}
+
+function findFolderPath(docs: DocumentTreeItem[], targetId?: string): DocumentTreeItem[] {
+  if (!targetId) {
+    return [];
+  }
+
+  const walk = (
+    items: DocumentTreeItem[],
+    path: DocumentTreeItem[],
+  ): DocumentTreeItem[] | null => {
+    for (const item of items) {
+      if (item.type !== DocumentType.FOLDER) {
+        continue;
+      }
+
+      const nextPath = [...path, item];
+      if (item.id === targetId) {
+        return nextPath;
+      }
+
+      const result = item.children ? walk(item.children, nextPath) : null;
+      if (result) {
+        return result;
+      }
+    }
+    return null;
+  };
+
+  return walk(docs, []) ?? [];
 }
 
 const DocumentCenterPage: React.FC = () => {
@@ -110,6 +145,13 @@ const DocumentCenterPage: React.FC = () => {
     if (!treeData) return [];
     return buildTreeData(treeData);
   }, [treeData]);
+
+  const folderPath = useMemo(
+    () => findFolderPath(treeData ?? [], selectedFolderId),
+    [treeData, selectedFolderId],
+  );
+
+  const currentFolder = folderPath[folderPath.length - 1];
 
   const { data: searchResults, isLoading: searchLoading } = useSearchDocuments(
     searchText ? teamId : undefined,
@@ -177,6 +219,18 @@ const DocumentCenterPage: React.FC = () => {
     },
     [orgId, teamId, navigate]
   );
+
+  const handleOpenRoot = useCallback(() => {
+    setSelectedFolderId(undefined);
+  }, []);
+
+  const handleOpenParent = useCallback(() => {
+    if (folderPath.length <= 1) {
+      setSelectedFolderId(undefined);
+      return;
+    }
+    setSelectedFolderId(folderPath[folderPath.length - 2].id);
+  }, [folderPath]);
 
   const columns: ColumnsType<IDocument> = useMemo(
     () => [
@@ -367,6 +421,33 @@ const DocumentCenterPage: React.FC = () => {
           </Space>
         </div>
 
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Button
+            icon={<HomeOutlined />}
+            onClick={handleOpenRoot}
+            disabled={!selectedFolderId}
+          >
+            全部文档
+          </Button>
+          <Button
+            icon={<ArrowLeftOutlined />}
+            onClick={handleOpenParent}
+            disabled={!selectedFolderId}
+          >
+            返回上级
+          </Button>
+          <Text type="secondary">
+            当前位置：
+            <a onClick={handleOpenRoot}>根目录</a>
+            {folderPath.map((folder) => (
+              <React.Fragment key={folder.id}>
+                {' / '}
+                <a onClick={() => setSelectedFolderId(folder.id)}>{folder.name}</a>
+              </React.Fragment>
+            ))}
+          </Text>
+        </Space>
+
         <Table<IDocument>
           rowKey="id"
           columns={columns}
@@ -376,7 +457,15 @@ const DocumentCenterPage: React.FC = () => {
           size="middle"
           locale={{
             emptyText: (
-              <EmptyState description="该文件夹为空" />
+              <EmptyState
+                description={
+                  searchText
+                    ? '没有匹配的文档'
+                    : currentFolder
+                      ? '该文件夹为空'
+                      : '暂无文档'
+                }
+              />
             ),
           }}
         />

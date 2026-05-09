@@ -5,18 +5,26 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RbacService } from '../rbac/rbac.service';
 import { CreateTemplateDto } from './dto/create-template.dto';
 
 @Injectable()
 export class ApprovalTemplateService {
   private readonly logger = new Logger(ApprovalTemplateService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly rbacService: RbacService,
+  ) {}
 
   /**
    * Create a new approval template with its approval nodes.
    */
-  async create(userId: string, dto: CreateTemplateDto) {
+  async create(userId: string, tenantId: string, dto: CreateTemplateDto) {
+    await this.rbacService.assertPermission('approval.manage', userId, tenantId, {
+      teamId: dto.teamId,
+    });
+
     const { name, description, scope, formFields, teamId, nodes } = dto;
 
     // Basic validation
@@ -76,7 +84,7 @@ export class ApprovalTemplateService {
   /**
    * Get a single template by ID.
    */
-  async findById(templateId: string) {
+  async findById(userId: string, tenantId: string, templateId: string) {
     const template = await this.prisma.approvalTemplate.findUnique({
       where: { id: templateId },
       include: {
@@ -91,6 +99,10 @@ export class ApprovalTemplateService {
       throw new NotFoundException('Approval template not found');
     }
 
+    await this.rbacService.assertPermission('approval.read', userId, tenantId, {
+      teamId: template.teamId,
+    });
+
     return template;
   }
 
@@ -99,6 +111,8 @@ export class ApprovalTemplateService {
    * Nodes are managed separately via updateNodes / addNode / removeNode.
    */
   async update(
+    userId: string,
+    tenantId: string,
     templateId: string,
     data: { name?: string; description?: string; scope?: string; formFields?: Record<string, any> },
   ) {
@@ -109,6 +123,10 @@ export class ApprovalTemplateService {
     if (!existing || existing.deletedAt) {
       throw new NotFoundException('Approval template not found');
     }
+
+    await this.rbacService.assertPermission('approval.manage', userId, tenantId, {
+      teamId: existing.teamId,
+    });
 
     const updated = await this.prisma.approvalTemplate.update({
       where: { id: templateId },
@@ -131,7 +149,7 @@ export class ApprovalTemplateService {
   /**
    * Soft-delete an approval template.
    */
-  async remove(templateId: string) {
+  async remove(userId: string, tenantId: string, templateId: string) {
     const existing = await this.prisma.approvalTemplate.findUnique({
       where: { id: templateId },
     });
@@ -139,6 +157,10 @@ export class ApprovalTemplateService {
     if (!existing || existing.deletedAt) {
       throw new NotFoundException('Approval template not found');
     }
+
+    await this.rbacService.assertPermission('approval.manage', userId, tenantId, {
+      teamId: existing.teamId,
+    });
 
     await this.prisma.approvalTemplate.update({
       where: { id: templateId },

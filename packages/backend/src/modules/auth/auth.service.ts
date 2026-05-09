@@ -414,7 +414,13 @@ export class AuthService {
     });
   }
 
-  private generateTokens(user: any) {
+  private async generateTokens(user: any) {
+    const latestTenantMembership = await this.prisma.tenantMember.findFirst({
+      where: { userId: user.id },
+      orderBy: { joinedAt: 'desc' },
+      select: { role: true },
+    });
+
     const payload = {
       sub: user.id,
       email: user.email,
@@ -423,7 +429,7 @@ export class AuthService {
     const accessToken = this.jwtService.sign(
       { ...payload, type: 'access' },
       {
-        expiresIn: this.configService.get<string>('jwt.expiration', '15m'),
+        expiresIn: this.configService.get<string>('jwt.expiration', '1d'),
       },
     );
 
@@ -443,6 +449,7 @@ export class AuthService {
         displayName: user.displayName,
         status: user.status,
       },
+      role: latestTenantMembership?.role ?? null,
     };
   }
 }

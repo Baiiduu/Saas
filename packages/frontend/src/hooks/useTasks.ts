@@ -90,7 +90,13 @@ export function useAssignTask() {
 export function useBoard(teamId: string | undefined) {
   return useQuery({
     queryKey: ['board', teamId],
-    queryFn: () => taskService.getTasks({ teamId, limit: 100 }),
+    queryFn: () =>
+      taskService.getTasks({
+        teamId,
+        limit: 100,
+        sortBy: 'sortOrder',
+        sortOrder: 'asc',
+      }),
     enabled: !!teamId,
   });
 }

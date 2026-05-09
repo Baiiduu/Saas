@@ -3,23 +3,27 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  HttpCode,
   Param,
   Post,
   Req,
+  Query,
   UnauthorizedException,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiPropertyOptional,
   ApiOperation,
   ApiParam,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { IsNotEmpty, IsString } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { Role } from '@saas/shared-types';
-import { Public } from '../../common/decorators/public.decorator';
 import { RBAC } from '../../common/decorators/rbac.decorator';
+import { CurrentTenant } from '../../common/decorators/current-tenant.decorator';
+import { TenantOptional } from '../../common/decorators/tenant-optional.decorator';
 import { AssignRoleDto } from './dto/assign-role.dto';
 import { RbacService } from './rbac.service';
 
@@ -34,7 +38,14 @@ class CheckPermissionBody {
   @IsNotEmpty()
   operation!: string;
 
+  @ApiPropertyOptional({ description: 'Target resource ID for resource-scoped checks' })
+  @IsOptional()
+  @IsString()
   resourceId?: string;
+
+  @ApiPropertyOptional({ description: 'Target team ID for team-scoped checks' })
+  @IsOptional()
+  @IsString()
   teamId?: string;
 }
 
@@ -55,6 +66,7 @@ export class RbacController {
    * The caller must be authenticated (JWT guard).
    */
   @Post('check')
+  @HttpCode(200)
   @ApiOperation({
     summary: 'Check current user permission',
     description:
@@ -75,12 +87,22 @@ export class RbacController {
       throw new UnauthorizedException('Authentication required');
     }
 
-    const allowed = await this.rbacService.checkPermission(
-      userId,
-      body.resourceType,
-      body.operation,
-      { resourceId: body.resourceId, teamId: body.teamId },
-    );
+    const allowed = req.tenantId
+      ? await this.rbacService.canAccessPermission(
+          `${body.resourceType}.${body.operation}`,
+          userId,
+          req.tenantId,
+          {
+            resourceId: body.resourceId,
+            teamId: body.teamId,
+          },
+        )
+      : await this.rbacService.checkPermission(
+          userId,
+          body.resourceType,
+          body.operation,
+          { resourceId: body.resourceId, teamId: body.teamId },
+        );
 
     return { allowed };
   }
@@ -107,6 +129,8 @@ export class RbacController {
   async getUserPermissions(
     @Req() req: any,
     @Param('userId') userId: string,
+    @CurrentTenant() tenantId?: string,
+    @Query('teamId') teamId?: string,
   ): Promise<{ userId: string; permissions: Record<string, boolean> }> {
     // Self-service is always allowed
     const currentUserId = req.user?.sub;
@@ -116,7 +140,11 @@ export class RbacController {
       await this.rbacService.requireRole(currentUserId, [Role.ADMIN, Role.OWNER]);
     }
 
-    const permissions = await this.rbacService.getUserEffectivePermissions(userId);
+    const permissions = await this.rbacService.getUserEffectivePermissions(
+      userId,
+      tenantId,
+      teamId,
+    );
     return { userId, permissions };
   }
 
@@ -126,6 +154,7 @@ export class RbacController {
    * Any authenticated user can view the role definitions.
    */
   @Get('roles')
+  @TenantOptional()
   @ApiOperation({
     summary: 'List available roles with hierarchy',
     description: 'Returns all role definitions sorted by privilege level (descending).',

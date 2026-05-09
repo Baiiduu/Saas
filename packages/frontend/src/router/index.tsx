@@ -140,30 +140,142 @@ export const AppRouter: React.FC = () => {
             <Route path="/org/:orgId/team/:teamId" element={<TeamLayout />}>
               <Route index element={<DashboardPage />} />
               {/* T-17: Task routes */}
-              <Route path="tasks" element={<TaskListPage />} />
-              <Route path="tasks/:taskId" element={<TaskDetailPage />} />
-              <Route path="board" element={<BoardPage />} />
+              <Route
+                path="tasks"
+                element={
+                  <PermissionGuard operations={['task.read']} redirectTo="__FORBIDDEN__">
+                    <TaskListPage />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="tasks/:taskId"
+                element={
+                  <PermissionGuard operations={['task.read']} redirectTo="__FORBIDDEN__">
+                    <TaskDetailPage />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="board"
+                element={
+                  <PermissionGuard operations={['task.read']} redirectTo="__FORBIDDEN__">
+                    <BoardPage />
+                  </PermissionGuard>
+                }
+              />
               {/* T-41: Gantt + Calendar */}
-              <Route path="gantt" element={<GanttPage />} />
-              <Route path="calendar" element={<CalendarPage />} />
+              <Route
+                path="gantt"
+                element={
+                  <PermissionGuard operations={['task.read']} redirectTo="__FORBIDDEN__">
+                    <GanttPage />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="calendar"
+                element={
+                  <PermissionGuard operations={['task.read']} redirectTo="__FORBIDDEN__">
+                    <CalendarPage />
+                  </PermissionGuard>
+                }
+              />
               {/* T-18: Document routes */}
-              <Route path="documents" element={<DocumentCenterPage />} />
-              <Route path="documents/:docId" element={<DocumentPreviewPage />} />
+              <Route
+                path="documents"
+                element={
+                  <PermissionGuard operations={['document.read']} redirectTo="__FORBIDDEN__">
+                    <DocumentCenterPage />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="documents/:docId"
+                element={
+                  <PermissionGuard operations={['document.read']} redirectTo="__FORBIDDEN__">
+                    <DocumentPreviewPage />
+                  </PermissionGuard>
+                }
+              />
               {/* T-42: Document edit route */}
-              <Route path="documents/:docId/edit" element={<DocumentEditorPage />} />
+              <Route
+                path="documents/:docId/edit"
+                element={
+                  <PermissionGuard operations={['document.read']} redirectTo="__FORBIDDEN__">
+                    <DocumentEditorPage />
+                  </PermissionGuard>
+                }
+              />
               {/* T-19: Approval routes */}
-              <Route path="approvals" element={<ApprovalListPage />} />
-              <Route path="approvals/new" element={<ApprovalListPage />} />
-              <Route path="approvals/:approvalId" element={<ApprovalDetailPage />} />
+              <Route
+                path="approvals"
+                element={
+                  <PermissionGuard operations={['approval.read']} redirectTo="__FORBIDDEN__">
+                    <ApprovalListPage />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="approvals/new"
+                element={
+                  <PermissionGuard operations={['approval.read']} redirectTo="__FORBIDDEN__">
+                    <ApprovalListPage />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="approvals/:approvalId"
+                element={
+                  <PermissionGuard operations={['approval.read']} redirectTo="__FORBIDDEN__">
+                    <ApprovalDetailPage />
+                  </PermissionGuard>
+                }
+              />
               {/* T-43: Approval template route */}
-              <Route path="approvals/templates" element={<ApprovalTemplatePage />} />
+              <Route
+                path="approvals/templates"
+                element={
+                  <PermissionGuard operations={['approval.manage']} redirectTo="__FORBIDDEN__">
+                    <ApprovalTemplatePage />
+                  </PermissionGuard>
+                }
+              />
               {/* T-46: Team chat route */}
-              <Route path="messages" element={<TeamChatPage />} />
+              <Route
+                path="messages"
+                element={
+                  <PermissionGuard operations={['message.read']} redirectTo="__FORBIDDEN__">
+                    <TeamChatPage />
+                  </PermissionGuard>
+                }
+              />
               {/* T-45: Milestone route */}
-              <Route path="milestones" element={<MilestonePage />} />
+              <Route
+                path="milestones"
+                element={
+                  <PermissionGuard operations={['milestone.read']} redirectTo="__FORBIDDEN__">
+                    <MilestonePage />
+                  </PermissionGuard>
+                }
+              />
               {/* T-44: Resource graph route */}
-              <Route path="graph" element={<ResourceGraphPage />} />
-              <Route path="members" element={<TeamMembers />} />
+              <Route
+                path="graph"
+                element={
+                  <PermissionGuard operations={['graph.read']} redirectTo="__FORBIDDEN__">
+                    <ResourceGraphPage />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="members"
+                element={
+                  <PermissionGuard operations={['member.read']} redirectTo="__FORBIDDEN__">
+                    <TeamMembers />
+                  </PermissionGuard>
+                }
+              />
               <Route
                 path="settings"
                 element={
@@ -175,7 +287,14 @@ export const AppRouter: React.FC = () => {
             </Route>
 
             {/* T-51: LLM chat route */}
-            <Route path="/org/:orgId/llm/chat" element={<ChatPage />} />
+            <Route
+              path="/org/:orgId/llm/chat"
+              element={
+                <PermissionGuard operations={['llm.read']} redirectTo="__FORBIDDEN__">
+                  <ChatPage />
+                </PermissionGuard>
+              }
+            />
 
             {/* T-20: Notification routes */}
             <Route path="/org/:orgId/notifications" element={<NotificationCenterPage />} />

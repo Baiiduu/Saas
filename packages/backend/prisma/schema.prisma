@@ -105,6 +105,48 @@ enum UserStatus {
   @@schema("public")
 }
 
+enum AiSessionStatus {
+  ACTIVE
+  ARCHIVED
+
+  @@schema("public")
+}
+
+enum AiMessageRole {
+  SYSTEM
+  USER
+  ASSISTANT
+  TOOL
+  SKILL
+
+  @@schema("public")
+}
+
+enum AiRunStatus {
+  PENDING
+  RUNNING
+  WAITING_CONFIRMATION
+  COMPLETED
+  FAILED
+
+  @@schema("public")
+}
+
+enum AiToolRiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+
+  @@schema("public")
+}
+
+enum AiMemoryScope {
+  USER
+  TEAM
+
+  @@schema("public")
+}
+
 // ══════════════════════════════════════════════════════════════
 //  PUBLIC SCHEMA MODELS (@@schema("public"))
 // ══════════════════════════════════════════════════════════════
@@ -145,6 +187,12 @@ model User {
   approvals       Approval[]
   sentMessages    Message[]        @relation("MessageSender")
   messageReads    MessageRead[]
+  aiSessions      AiSession[]
+  aiSkillRuns     AiSkillRun[]
+  aiToolCalls     AiToolCall[]
+  aiAuditLogs     AiAuditLog[]
+  aiMemories      AiMemory[]
+  graphCanvases   GraphCanvas[]
 
   @@schema("public")
   @@map("users")
@@ -220,6 +268,13 @@ model Team {
   milestones   Milestone[]
   resourceRepos ResourceRepo[]
   messages     Message[]
+  aiSessions   AiSession[]
+  aiSkillRuns  AiSkillRun[]
+  aiToolCalls  AiToolCall[]
+  aiAuditLogs  AiAuditLog[]
+  aiMemories   AiMemory[]
+  graphCanvases GraphCanvas[]
+  graphNodes    GraphNode[]
 
   @@schema("tenant")
   @@index([tenantId])
@@ -475,6 +530,7 @@ model ApprovalNode {
 
 model Approval {
   id              String         @id @default(uuid()) @db.Uuid
+  title           String         @default("")
   templateId      String         @map("template_id") @db.Uuid
   formData        Json           @map("form_data") @db.JsonB
   status          ApprovalStatus @default(PENDING)
@@ -702,20 +758,269 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+model AiSession {
+  id                  String          @id @default(uuid()) @db.Uuid
+  tenantId            String          @map("tenant_id") @db.Uuid
+  userId              String          @map("user_id") @db.Uuid
+  teamId              String?         @map("team_id") @db.Uuid
+  title               String?
+  status              AiSessionStatus @default(ACTIVE)
+  contextResourceType String?         @map("context_resource_type")
+  contextResourceId   String?         @map("context_resource_id") @db.Uuid
+  lastActiveAt        DateTime        @default(now()) @map("last_active_at")
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
+
+  user      User         @relation(fields: [userId], references: [id])
+  team      Team?        @relation(fields: [teamId], references: [id])
+  messages  AiMessage[]
+  toolCalls AiToolCall[]
+  skillRuns AiSkillRun[]
+  auditLogs AiAuditLog[]
+  memories  AiMemory[]   @relation("AiMemorySourceSession")
+
+  @@schema("tenant")
+  @@index([tenantId, userId, lastActiveAt])
+  @@index([teamId])
+  @@map("ai_sessions")
+}
+
+model AiMessage {
+  id        String        @id @default(uuid()) @db.Uuid
+  sessionId String        @map("session_id") @db.Uuid
+  role      AiMessageRole
+  content   String
+  metadata  Json?         @db.JsonB
+  createdAt DateTime      @default(now()) @map("created_at")
+
+  session AiSession @relation(fields: [sessionId], references: [id])
+
+  @@schema("tenant")
+  @@index([sessionId, createdAt])
+  @@map("ai_messages")
+}
+
+model AiSkillRun {
+  id        String      @id @default(uuid()) @db.Uuid
+  sessionId String?     @map("session_id") @db.Uuid
+  userId    String      @map("user_id") @db.Uuid
+  tenantId  String      @map("tenant_id") @db.Uuid
+  teamId    String?     @map("team_id") @db.Uuid
+  skillId   String      @map("skill_id")
+  skillName String      @map("skill_name")
+  status    AiRunStatus @default(PENDING)
+  args      Json        @default("{}") @db.JsonB
+  result    Json?       @db.JsonB
+  error     String?
+  steps     Json?       @db.JsonB
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  session   AiSession?   @relation(fields: [sessionId], references: [id])
+  user      User         @relation(fields: [userId], references: [id])
+  team      Team?        @relation(fields: [teamId], references: [id])
+  toolCalls AiToolCall[]
+  auditLogs AiAuditLog[]
+
+  @@schema("tenant")
+  @@index([tenantId, userId, createdAt])
+  @@index([sessionId])
+  @@index([teamId])
+  @@map("ai_skill_runs")
+}
+
+model AiToolCall {
+  id                    String          @id @default(uuid()) @db.Uuid
+  sessionId             String?         @map("session_id") @db.Uuid
+  skillRunId            String?         @map("skill_run_id") @db.Uuid
+  userId                String          @map("user_id") @db.Uuid
+  tenantId              String          @map("tenant_id") @db.Uuid
+  teamId                String?         @map("team_id") @db.Uuid
+  toolId                String          @map("tool_id")
+  toolName              String          @map("tool_name")
+  requiredPermission    String          @map("required_permission")
+  resourceType          String          @map("resource_type")
+  actionType            String          @map("action_type")
+  riskLevel             AiToolRiskLevel @default(LOW) @map("risk_level")
+  status                AiRunStatus     @default(PENDING)
+  args                  Json            @default("{}") @db.JsonB
+  result                Json?           @db.JsonB
+  error                 String?
+  confirmationToken     String?         @unique @map("confirmation_token")
+  confirmationExpiresAt DateTime?       @map("confirmation_expires_at")
+  confirmedAt           DateTime?       @map("confirmed_at")
+  executionTimeMs       Int?            @map("execution_time_ms")
+  createdAt             DateTime        @default(now()) @map("created_at")
+  updatedAt             DateTime        @updatedAt @map("updated_at")
+
+  session   AiSession?   @relation(fields: [sessionId], references: [id])
+  skillRun  AiSkillRun?  @relation(fields: [skillRunId], references: [id])
+  user      User         @relation(fields: [userId], references: [id])
+  team      Team?        @relation(fields: [teamId], references: [id])
+  auditLogs AiAuditLog[]
+
+  @@schema("tenant")
+  @@index([tenantId, userId, createdAt])
+  @@index([sessionId])
+  @@index([skillRunId])
+  @@index([teamId])
+  @@index([status])
+  @@map("ai_tool_calls")
+}
+
+model AiAuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  sessionId  String?  @map("session_id") @db.Uuid
+  skillRunId String?  @map("skill_run_id") @db.Uuid
+  toolCallId String?  @map("tool_call_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  teamId     String?  @map("team_id") @db.Uuid
+  eventType  String   @map("event_type")
+  action     String
+  status     String
+  detail     Json?    @db.JsonB
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  session  AiSession?  @relation(fields: [sessionId], references: [id])
+  skillRun AiSkillRun? @relation(fields: [skillRunId], references: [id])
+  toolCall AiToolCall? @relation(fields: [toolCallId], references: [id])
+  user     User        @relation(fields: [userId], references: [id])
+  team     Team?       @relation(fields: [teamId], references: [id])
+
+  @@schema("tenant")
+  @@index([tenantId, userId, createdAt])
+  @@index([sessionId])
+  @@index([skillRunId])
+  @@index([toolCallId])
+  @@index([teamId])
+  @@index([eventType])
+  @@map("ai_audit_logs")
+}
+
+model AiMemory {
+  id               String        @id @default(uuid()) @db.Uuid
+  tenantId         String        @map("tenant_id") @db.Uuid
+  userId           String        @map("user_id") @db.Uuid
+  teamId           String?       @map("team_id") @db.Uuid
+  sourceSessionId  String?       @map("source_session_id") @db.Uuid
+  scope            AiMemoryScope @default(USER)
+  key              String        @map("memory_key")
+  content          String
+  metadata         Json?         @db.JsonB
+  lastReferencedAt DateTime?     @map("last_referenced_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  user          User       @relation(fields: [userId], references: [id])
+  team          Team?      @relation(fields: [teamId], references: [id])
+  sourceSession AiSession? @relation("AiMemorySourceSession", fields: [sourceSessionId], references: [id])
+
+  @@schema("tenant")
+  @@index([tenantId, userId, updatedAt])
+  @@index([teamId, scope, updatedAt])
+  @@index([sourceSessionId])
+  @@index([tenantId, userId, key])
+  @@map("ai_memories")
+}
+
+// ── Resource Graph Canvas ───────────────────────────────────
+
+model GraphCanvas {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  teamId      String   @map("team_id") @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  isDefault   Boolean  @default(true) @map("is_default")
+  viewport    Json?    @db.JsonB
+  createdBy   String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  team    Team        @relation(fields: [teamId], references: [id])
+  creator User        @relation(fields: [createdBy], references: [id])
+  nodes   GraphNode[]
+  edges   GraphEdge[]
+
+  @@schema("tenant")
+  @@index([tenantId])
+  @@index([teamId])
+  @@index([teamId, isDefault])
+  @@unique([teamId, name])
+  @@map("graph_canvases")
+}
+
+model GraphNode {
+  id           String   @id @default(uuid()) @db.Uuid
+  canvasId     String   @map("canvas_id") @db.Uuid
+  teamId       String   @map("team_id") @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  nodeType     String   @map("node_type")
+  resourceType String?  @map("resource_type")
+  resourceId   String?  @map("resource_id") @db.Uuid
+  title        String
+  description  String?
+  x            Float    @default(0)
+  y            Float    @default(0)
+  width        Float?
+  height       Float?
+  parentNodeId String?  @map("parent_node_id") @db.Uuid
+  metadata     Json     @default("{}") @db.JsonB
+  createdBy    String   @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  canvas       GraphCanvas @relation(fields: [canvasId], references: [id])
+  team         Team        @relation(fields: [teamId], references: [id])
+  parent       GraphNode?  @relation("GraphNodeHierarchy", fields: [parentNodeId], references: [id])
+  children     GraphNode[] @relation("GraphNodeHierarchy")
+  sourceEdges  GraphEdge[] @relation("GraphEdgeSourceNode")
+  targetEdges  GraphEdge[] @relation("GraphEdgeTargetNode")
+
+  @@schema("tenant")
+  @@index([tenantId])
+  @@index([teamId])
+  @@index([canvasId])
+  @@index([parentNodeId])
+  @@index([resourceType, resourceId])
+  @@unique([canvasId, nodeType, resourceId])
+  @@map("graph_nodes")
+}
+
 // ── GraphEdge ───────────────────────────────────────────────
 
 model GraphEdge {
   id           String   @id @default(uuid()) @db.Uuid
+  canvasId     String?  @map("canvas_id") @db.Uuid
+  teamId       String?  @map("team_id") @db.Uuid
+  tenantId     String?  @map("tenant_id") @db.Uuid
+  sourceNodeId String?  @map("source_node_id") @db.Uuid
+  targetNodeId String?  @map("target_node_id") @db.Uuid
   sourceType   String   @map("source_type")
   sourceId     String   @map("source_id") @db.Uuid
   targetType   String   @map("target_type")
   targetId     String   @map("target_id") @db.Uuid
   relationType String   @map("relation_type")
+  createdBy    String?  @map("created_by") @db.Uuid
+  metadata     Json     @default("{}") @db.JsonB
   createdAt    DateTime @default(now()) @map("created_at")
 
+  canvas     GraphCanvas? @relation(fields: [canvasId], references: [id])
+  sourceNode GraphNode?   @relation("GraphEdgeSourceNode", fields: [sourceNodeId], references: [id])
+  targetNode GraphNode?   @relation("GraphEdgeTargetNode", fields: [targetNodeId], references: [id])
+
   @@schema("tenant")
+  @@index([tenantId])
+  @@index([teamId])
+  @@index([canvasId])
+  @@index([sourceNodeId])
+  @@index([targetNodeId])
   @@index([sourceType, sourceId])
   @@index([targetType, targetId])
+  @@unique([canvasId, sourceNodeId, targetNodeId, relationType])
   @@unique([sourceType, sourceId, targetType, targetId, relationType])
   @@map("graph_edges")
 }
@@ -728,6 +1033,7 @@ model Message {
   senderId  String      @map("sender_id") @db.Uuid
   content   String
   type      MessageType @default(TEXT)
+  metadata  Json        @default("{}") @db.JsonB
   createdAt DateTime    @default(now()) @map("created_at")
 
   // Relations

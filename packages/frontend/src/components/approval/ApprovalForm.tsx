@@ -30,9 +30,64 @@ interface TemplateOption {
   formFields: Record<string, unknown>;
 }
 
+interface ApprovalField {
+  name: string;
+  label: string;
+  type: 'text' | 'textarea' | 'number' | 'date' | 'select' | 'switch';
+  required?: boolean;
+  options?: Array<{ label: string; value: string }>;
+}
+
+function normalizeTemplateFields(formFields?: Record<string, unknown>): ApprovalField[] {
+  if (!formFields) return [];
+  const rawFields = Array.isArray(formFields)
+    ? formFields
+    : Array.isArray((formFields as { fields?: unknown }).fields)
+      ? ((formFields as { fields: unknown[] }).fields)
+      : Object.entries(formFields).map(([name, config]) => ({
+          name,
+          ...(typeof config === 'object' && config ? (config as Record<string, unknown>) : {}),
+        }));
+
+  return rawFields
+    .map((field): ApprovalField | null => {
+      if (!field || typeof field !== 'object') return null;
+      const raw = field as Record<string, unknown>;
+      const name = String(raw.name || raw.key || '').trim();
+      if (!name) return null;
+      const rawOptions = Array.isArray(raw.options) ? raw.options : [];
+      return {
+        name,
+        label: String(raw.label || name),
+        type: (raw.type === 'boolean' ? 'switch' : raw.type || 'text') as ApprovalField['type'],
+        required: Boolean(raw.required),
+        options: rawOptions.map((option) =>
+          typeof option === 'string'
+            ? { label: option, value: option }
+            : {
+                label: String((option as Record<string, unknown>)?.label ?? ''),
+                value: String((option as Record<string, unknown>)?.value ?? ''),
+              }
+        ),
+      };
+    })
+    .filter((field): field is ApprovalField => Boolean(field));
+}
+
+function normalizeFormData(data: Record<string, unknown> = {}) {
+  return Object.fromEntries(
+    Object.entries(data).map(([key, value]) => {
+      if (value && typeof value === 'object' && 'toISOString' in value) {
+        return [key, (value as { toISOString: () => string }).toISOString()];
+      }
+      return [key, value];
+    })
+  );
+}
+
 const ApprovalForm: React.FC<ApprovalFormProps> = ({ open, onClose, teamId }) => {
   const [form] = Form.useForm();
-  const { data: templates, isLoading: templatesLoading } = useApprovalTemplates();
+  const { data: templates, isLoading: templatesLoading } = useApprovalTemplates(teamId);
   const createMutation = useCreateApproval();
 
   const templateOptions: TemplateOption[] = useMemo(
@@ -47,6 +102,11 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ open, onClose, teamId }) =>
     [templateOptions, selectedTemplateId]
   );
 
+  const selectedFields = useMemo(
+    () => normalizeTemplateFields(selectedTemplate?.formFields),
+    [selectedTemplate]
+  );
+
   useEffect(() => {
     if (open) {
       form.resetFields();
@@ -54,21 +114,9 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ open, onClose, teamId }) =>
   }, [open, form]);
 
   const renderDynamicFields = useCallback(() => {
-    if (!selectedTemplate?.formFields) return null;
+    if (selectedFields.length === 0) return null;
 
-    const fields = (Array.isArray(selectedTemplate.formFields)
-      ? (selectedTemplate.formFields as unknown as Array<{
-          name: string;
-          label: string;
-          type: 'text' | 'textarea' | 'number' | 'date' | 'select' | 'switch';
-          required?: boolean;
-          options?: { label: string; value: string }[];
-        }>)
-      : []);
-
-    if (fields.length === 0) return null;
-
-    return fields.map((field) => (
+    return selectedFields.map((field) => (
       <Form.Item
         key={field.name}
         name={['formData', field.name]}
@@ -93,7 +141,7 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ open, onClose, teamId }) =>
         )}
       </Form.Item>
     ));
-  }, [selectedTemplate]);
+  }, [selectedFields]);
 
   const handleSubmit = useCallback(async () => {
     try {
@@ -101,7 +149,7 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ open, onClose, teamId }) =>
       await createMutation.mutateAsync({
         title: values.title,
         templateId: values.templateId,
-        formData: values.formData || {},
+        formData: normalizeFormData(values.formData || {}),
         teamId,
       });
       message.success('审批已提交');
@@ -159,14 +207,12 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ open, onClose, teamId }) =>
           />
         </Form.Item>
 
-        {selectedTemplate && selectedTemplate.formFields && (
+        {selectedTemplate && (
           <Card title="表单字段" size="small" style={{ marginTop: 16 }}>
-            {renderDynamicFields()}
+            {selectedFields.length > 0 ? renderDynamicFields() : (
+              <Text type="secondary">该模板没有额外的表单字段</Text>
+            )}
           </Card>
-        )}
-
-        {selectedTemplate && !selectedTemplate.formFields && (
-          <Text type="secondary">该模板没有额外的表单字段</Text>
         )}
       </Form>
     </Modal>

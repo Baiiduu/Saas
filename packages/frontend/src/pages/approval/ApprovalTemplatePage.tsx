@@ -13,6 +13,7 @@ import {
 } from 'antd';
 import { ArrowLeftOutlined, PlusOutlined, EyeOutlined } from '@ant-design/icons';
 import { useApprovalTemplates, useApprovalTemplate } from '@/hooks/useApprovals';
+import { useTeamMembers } from '@/hooks/useTenant';
 import { teamSubPath } from '@/router/routes';
 import Loading from '@/components/common/Loading';
 import EmptyState from '@/components/common/EmptyState';
@@ -20,11 +21,19 @@ import TemplateBuilder from '@/components/approval/TemplateBuilder';
 
 const { Title, Text } = Typography;
 
+function getFieldCount(formFields: Record<string, unknown> = {}) {
+  if (Array.isArray(formFields)) return formFields.length;
+  const fields = (formFields as { fields?: unknown }).fields;
+  if (Array.isArray(fields)) return fields.length;
+  return Object.keys(formFields || {}).length;
+}
+
 const ApprovalTemplatePage: React.FC = () => {
   const { orgId, teamId } = useParams<{ orgId: string; teamId: string }>();
   const navigate = useNavigate();
 
   const { data: templates, isLoading, isError, error } = useApprovalTemplates(teamId);
+  const { data: members = [] } = useTeamMembers(teamId);
   const [builderOpen, setBuilderOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const { data: templateDetail, isLoading: detailLoading } = useApprovalTemplate(
@@ -38,6 +47,12 @@ const ApprovalTemplatePage: React.FC = () => {
   }, [orgId, teamId, navigate]);
 
   const templateList = Array.isArray(templates) ? templates : [];
+  const memberNameById = new Map(
+    members.map((member) => [
+      member.userId,
+      member.displayName || member.email || member.userId,
+    ])
+  );
 
   if (!orgId || !teamId) return null;
 
@@ -115,7 +130,7 @@ const ApprovalTemplatePage: React.FC = () => {
                   <Text type="secondary">{template.description || '无描述'}</Text>
                   <br />
                   <Tag style={{ marginTop: 6 }}>
-                    {Object.keys(template.formFields || {}).length} 个字段
+                    {getFieldCount(template.formFields)} 个字段
                   </Tag>
                 </div>
                 <Button
@@ -150,9 +165,9 @@ const ApprovalTemplatePage: React.FC = () => {
               {(templateDetail as Record<string, unknown>)?.scope as string || '通用'}
             </Descriptions.Item>
             <Descriptions.Item label="字段数量">
-              {Object.keys(
+              {getFieldCount(
                 ((templateDetail as Record<string, unknown>)?.formFields as Record<string, unknown>) || {}
-              ).length}
+              )}
             </Descriptions.Item>
             <Descriptions.Item label="审批节点">
               {((templateDetail as Record<string, unknown>)?.nodes as Array<Record<string, unknown>>)?.length ? (
@@ -162,6 +177,11 @@ const ApprovalTemplatePage: React.FC = () => {
                   )?.map((node, idx) => (
                     <li key={idx}>
                       {node.name as string} ({node.approverType as string})
+                      {Array.isArray((node.config as { approverIds?: unknown[] } | undefined)?.approverIds)
+                        ? `，默认接收人：${((node.config as { approverIds: unknown[] }).approverIds)
+                            .map((id) => memberNameById.get(String(id)) || String(id))
+                            .join(', ')}`
+                        : ''}
                     </li>
                   ))}
                 </ul>

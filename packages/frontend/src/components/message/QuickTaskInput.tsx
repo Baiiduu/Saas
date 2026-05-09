@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Input, AutoComplete, Tag, Typography, Space, message } from 'antd';
+import { Input, AutoComplete, Tag, Typography, Space } from 'antd';
 import {
   FileTextOutlined,
   FormOutlined,
@@ -8,6 +8,15 @@ import {
 import { useDebounce } from '@/hooks/useDebounce';
 
 const { Text } = Typography;
+
+interface RefOption {
+  [key: string]: unknown;
+  value: string;
+  label: React.ReactNode;
+  kind: 'command' | 'resource';
+  refType?: 'task' | 'doc';
+  refItem?: QuickRefItem;
+}
 
 export interface QuickRefItem {
   id: string;
@@ -44,6 +53,7 @@ const QuickTaskInput: React.FC<QuickTaskInputProps> = ({
   onSearch,
 }) => {
   const [inputValue, setInputValue] = useState(externalValue);
+  const [menuMode, setMenuMode] = useState<'command' | 'resource' | null>(null);
   const [triggerType, setTriggerType] = useState<'task' | 'doc' | null>(null);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [options, setOptions] = useState<QuickRefItem[]>([]);
@@ -58,7 +68,7 @@ const QuickTaskInput: React.FC<QuickTaskInputProps> = ({
 
   // Search when debounced keyword changes
   useEffect(() => {
-    if (!triggerType || !debouncedKeyword) {
+    if (menuMode !== 'resource' || !triggerType) {
       setOptions([]);
       return;
     }
@@ -66,9 +76,9 @@ const QuickTaskInput: React.FC<QuickTaskInputProps> = ({
     const performSearch = async () => {
       try {
         if (onSearch) {
-          const results = await onSearch(triggerType, debouncedKeyword);
+          const results = await onSearch(triggerType, debouncedKeyword.trim());
           setOptions(results);
-          setDropdownOpen(results.length > 0);
+          setDropdownOpen(true);
         } else {
           // Default mock search
           const mockResults: QuickRefItem[] = [];
@@ -89,19 +99,30 @@ const QuickTaskInput: React.FC<QuickTaskInputProps> = ({
     };
 
     performSearch();
-  }, [triggerType, debouncedKeyword, onSearch]);
+  }, [menuMode, triggerType, debouncedKeyword, onSearch]);
 
   const handleChange = useCallback(
     (value: string) => {
       setInputValue(value);
       onChange?.(value);
 
-      // Detect @task or @doc trigger
-      const atMatch = value.match(/@(task|doc)(?:\s+(\w*))?$/i);
-      if (atMatch) {
-        setTriggerType(atMatch[1].toLowerCase() as 'task' | 'doc');
-        setSearchKeyword(atMatch[2] || '');
+      const resourceMatch = value.match(/@(task|doc)(?:\s+([^\n@]*))?$/i);
+      if (resourceMatch) {
+        setMenuMode('resource');
+        setTriggerType(resourceMatch[1].toLowerCase() as 'task' | 'doc');
+        setSearchKeyword(resourceMatch[2] || '');
+        setDropdownOpen(true);
+        return;
+      }
+
+      const commandMatch = value.match(/@([a-z]*)$/i);
+      if (commandMatch) {
+        setMenuMode('command');
+        setTriggerType(null);
+        setSearchKeyword(commandMatch[1] || '');
+        setDropdownOpen(true);
       } else {
+        setMenuMode(null);
         setTriggerType(null);
         setSearchKeyword('');
         setDropdownOpen(false);
@@ -112,26 +133,43 @@ const QuickTaskInput: React.FC<QuickTaskInputProps> = ({
 
   const handleSelect = useCallback(
     (_value: string, option: Record<string, unknown>) => {
-      const item = option as unknown as QuickRefItem;
-      if (item && triggerType) {
+      const selected = option as unknown as RefOption;
+
+      if (selected.kind === 'command' && selected.refType) {
+        const newValue = inputValue.replace(/@[a-z]*$/i, `@${selected.refType} `);
+        setInputValue(newValue);
+        onChange?.(newValue);
+        setMenuMode('resource');
+        setTriggerType(selected.refType);
+        setSearchKeyword('');
+        setDropdownOpen(true);
+        return;
+      }
+
+      const item = selected.refItem;
+      if (item) {
         // Replace the @trigger keyword with the selected reference
         const newValue = inputValue.replace(
-          new RegExp(`@${triggerType}\\s*\\w*$`),
-          `@[${item.label}](${item.id})`
+          new RegExp(`@${item.type}\\s*[^\\n@]*$`),
+          `@[${item.type}|${item.label}](${item.id}) `
         );
         setInputValue(newValue);
         onChange?.(newValue);
         onReferenceSelect?.(item);
         setDropdownOpen(false);
+        setMenuMode(null);
         setTriggerType(null);
       }
     },
-    [inputValue, triggerType, onChange, onReferenceSelect]
+    [inputValue, onChange, onReferenceSelect]
   );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Enter' && !e.shiftKey) {
+        if (dropdownOpen) {
+          return;
+        }
         e.preventDefault();
         if (inputValue.trim()) {
           onSend?.(inputValue);
@@ -140,13 +178,54 @@ const QuickTaskInput: React.FC<QuickTaskInputProps> = ({
         }
       }
     },
-    [inputValue, onSend, onChange]
+    [dropdownOpen, inputValue, onSend, onChange]
   );
 
   const autoCompleteOptions = useMemo(
-    () =>
-      options.map((item) => ({
+    (): RefOption[] => {
+      if (menuMode === 'command') {
+        const normalizedKeyword = searchKeyword.toLowerCase();
+        const commandOptions: RefOption[] = [
+          {
+            value: '__command_task__',
+            kind: 'command',
+            refType: 'task',
+            label: (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0' }}>
+                <FormOutlined style={{ color: '#52c41a' }} />
+                <div>
+                  <Text style={{ fontSize: 13 }}>引用任务</Text>
+                  <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+                    选择后继续搜索并插入任务引用
+                  </Text>
+                </div>
+              </div>
+            ),
+          },
+          {
+            value: '__command_doc__',
+            kind: 'command',
+            refType: 'doc',
+            label: (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0' }}>
+                <FileTextOutlined style={{ color: '#1677ff' }} />
+                <div>
+                  <Text style={{ fontSize: 13 }}>引用文档</Text>
+                  <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+                    选择后继续搜索并插入文档引用
+                  </Text>
+                </div>
+              </div>
+            ),
+          },
+        ];
+        return commandOptions.filter((item) => !normalizedKeyword || item.refType?.includes(normalizedKeyword));
+      }
+
+      return options.map((item) => ({
         value: item.id,
+        kind: 'resource',
+        refItem: item,
         label: (
           <div
             style={{
@@ -174,8 +253,9 @@ const QuickTaskInput: React.FC<QuickTaskInputProps> = ({
             </div>
           </div>
         ),
-      })),
-    [options]
+      }));
+    },
+    [menuMode, options, searchKeyword]
   );
 
   return (

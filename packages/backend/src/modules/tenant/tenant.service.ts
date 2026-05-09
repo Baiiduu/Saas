@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RbacService } from '../rbac/rbac.service';
 import { TenantProvisionService } from './tenant.provision.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
@@ -38,6 +39,7 @@ export class TenantService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly rbacService: RbacService,
     private readonly provisionService: TenantProvisionService,
   ) {}
 
@@ -107,18 +109,15 @@ export class TenantService {
    * Only the tenant owner can update the tenant details.
    */
   async update(id: string, userId: string, dto: UpdateTenantDto) {
+    await this.rbacService.assertPermission('tenant.update', userId, id);
+
     const tenant = await this.prisma.tenant.findUnique({
       where: { id },
-      select: { id: true, ownerId: true, deletedAt: true },
+      select: { id: true, deletedAt: true },
     });
 
     if (!tenant || tenant.deletedAt) {
       throw new NotFoundException('Tenant not found');
-    }
-
-    // Only the owner can update tenant info
-    if (tenant.ownerId !== userId) {
-      throw new BadRequestException('Only the tenant owner can update enterprise information');
     }
 
     const data: any = {};
@@ -172,7 +171,9 @@ export class TenantService {
   }
 
   /** Find a tenant by its ID. */
-  async findById(id: string) {
+  async findById(id: string, userId: string) {
+    await this.rbacService.assertTenantAccess(userId, id);
+
     const tenant = await this.prisma.tenant.findUnique({
       where: { id },
       include: {
@@ -199,9 +200,16 @@ export class TenantService {
   }
 
   /** List all active tenants. */
-  async findAll() {
+  async findAll(userId: string) {
     return this.prisma.tenant.findMany({
-      where: { deletedAt: null },
+      where: {
+        deletedAt: null,
+        members: {
+          some: {
+            userId,
+          },
+        },
+      },
       include: {
         owner: {
           select: {
@@ -219,7 +227,9 @@ export class TenantService {
   // ── Members ─────────────────────────────────────────────────
 
   /** Get all members of a tenant. */
-  async getMembers(tenantId: string) {
+  async getMembers(tenantId: string, userId: string) {
+    await this.rbacService.assertPermission('tenant.read', userId, tenantId);
+
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
       select: { id: true, deletedAt: true },
@@ -255,6 +265,8 @@ export class TenantService {
     createdBy: string,
     dto: CreateInvitationDto,
   ) {
+    await this.rbacService.assertPermission('tenant.invite', createdBy, tenantId);
+
     // Verify tenant exists
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -400,6 +412,8 @@ export class TenantService {
    * Only the tenant owner can freeze.
    */
   async freeze(id: string, userId: string) {
+    await this.rbacService.assertTenantAccess(userId, id);
+
     const tenant = await this.prisma.tenant.findUnique({
       where: { id },
       select: { id: true, ownerId: true, status: true, deletedAt: true },
@@ -431,6 +445,8 @@ export class TenantService {
    * Only the tenant owner can unfreeze.
    */
   async unfreeze(id: string, userId: string) {
+    await this.rbacService.assertTenantAccess(userId, id);
+
     const tenant = await this.prisma.tenant.findUnique({
       where: { id },
       select: { id: true, ownerId: true, status: true, deletedAt: true },
@@ -462,6 +478,8 @@ export class TenantService {
    * Only the tenant owner can unsubscribe.
    */
   async unsubscribe(id: string, userId: string) {
+    await this.rbacService.assertTenantAccess(userId, id);
+
     const tenant = await this.prisma.tenant.findUnique({
       where: { id },
       select: { id: true, ownerId: true, deletedAt: true },
@@ -490,7 +508,9 @@ export class TenantService {
   /**
    * Get the current quota usage for a tenant.
    */
-  async getQuota(id: string): Promise<TenantQuota> {
+  async getQuota(id: string, userId: string): Promise<TenantQuota> {
+    await this.rbacService.assertPermission('tenant.read', userId, id);
+
     const tenant = await this.prisma.tenant.findUnique({
       where: { id },
       select: { id: true, deletedAt: true },
@@ -529,6 +549,8 @@ export class TenantService {
    * Only the tenant owner can update quotas.
    */
   async updateQuota(id: string, userId: string, dto: UpdateQuotaDto) {
+    await this.rbacService.assertTenantAccess(userId, id);
+
     const tenant = await this.prisma.tenant.findUnique({
       where: { id },
       select: { id: true, ownerId: true, deletedAt: true },

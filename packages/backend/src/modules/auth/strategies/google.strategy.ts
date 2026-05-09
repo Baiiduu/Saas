@@ -59,7 +59,7 @@ export class GoogleOAuthStrategy {
     const payload = { sub: user.id, email: user.email };
     const accessToken = this.jwtService.sign(
       { ...payload, type: 'access' },
-      { expiresIn: this.configService.get<string>('jwt.expiration', '15m') },
+      { expiresIn: this.configService.get<string>('jwt.expiration', '1d') },
     );
     const refreshToken = this.jwtService.sign(
       { ...payload, type: 'refresh', jti: randomUUID() },

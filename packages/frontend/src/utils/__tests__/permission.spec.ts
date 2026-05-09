@@ -22,12 +22,13 @@ describe('canPerformOperation', () => {
 
   it('should return true for LEADER performing leader-level operations', () => {
     expect(canPerformOperation(Role.LEADER, 'task.assign')).toBe(true);
-    expect(canPerformOperation(Role.LEADER, 'team.create')).toBe(true);
+    expect(canPerformOperation(Role.LEADER, 'team.update')).toBe(true);
+    expect(canPerformOperation(Role.LEADER, 'member.update')).toBe(true);
     expect(canPerformOperation(Role.LEADER, 'resource.create')).toBe(true);
   });
 
   it('should return false for LEADER performing admin-level operations', () => {
-    expect(canPerformOperation(Role.LEADER, 'team.update_member_role')).toBe(false);
+    expect(canPerformOperation(Role.LEADER, 'team.create')).toBe(false);
     expect(canPerformOperation(Role.LEADER, 'audit.view')).toBe(false);
   });
 
@@ -105,9 +106,9 @@ describe('getAllowedOperations', () => {
 });
 
 describe('getMinimumRoleForOperation', () => {
-  it('should return Role.OWNER for tenant-level operations', () => {
+  it('should return the aligned tenant-level minimum roles', () => {
     expect(getMinimumRoleForOperation('tenant.delete')).toBe(Role.OWNER);
-    expect(getMinimumRoleForOperation('tenant.update')).toBe(Role.OWNER);
+    expect(getMinimumRoleForOperation('tenant.update')).toBe(Role.ADMIN);
   });
 
   it('should return Role.ADMIN for admin-level operations', () => {

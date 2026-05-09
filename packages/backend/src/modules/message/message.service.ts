@@ -5,11 +5,19 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 import { SendMessageDto } from './dto/send-message.dto';
 
 // Internal type: SendMessageDto without teamId, plus teamId from URL param
 export interface SendMessagePayload extends SendMessageDto {
   teamId: string;
+}
+
+interface ResolvedMessageReference {
+  type: 'task' | 'doc';
+  resourceId: string;
+  label: string;
+  url: string;
 }
 
 @Injectable()
@@ -25,12 +33,15 @@ export class MessageService {
    * Supports quick-create task (@task) and document reference (@doc).
    */
   async sendMessage(userId: string, dto: SendMessagePayload) {
+    const references = await this.resolveReferences(dto.teamId, dto.references ?? []);
+
     const message = await this.prisma.message.create({
       data: {
         teamId: dto.teamId,
         senderId: userId,
         content: dto.content,
         type: dto.type ?? 'TEXT',
+        metadata: (references.length > 0 ? { references } : {}) as Prisma.InputJsonValue,
       },
       include: {
         sender: {
@@ -65,29 +76,64 @@ export class MessageService {
       }
     }
 
-    // Document references (@doc)
-    if (dto.references && dto.references.length > 0) {
-      const refs = [];
-      for (const ref of dto.references) {
-        if (ref.type === 'doc') {
-          try {
-            const doc = await this.prisma.document.findUnique({
-              where: { id: ref.resourceId },
-              select: { id: true, name: true, type: true },
-            });
-            if (doc) {
-              refs.push(doc);
-            }
-          } catch {
-            this.logger.warn(`Document reference ${ref.resourceId} not found`);
-          }
-        }
-      }
-      results.references = refs;
+    if (references.length > 0) {
+      results.references = references;
     }
 
     this.logger.log(`Message ${message.id} sent in team ${dto.teamId} by user ${userId}`);
     return results;
+  }
+
+  private async resolveReferences(
+    teamId: string,
+    references: NonNullable<SendMessageDto['references']>,
+  ): Promise<ResolvedMessageReference[]> {
+    if (references.length === 0) {
+      return [];
+    }
+
+    const resolved: ResolvedMessageReference[] = [];
+    const seen = new Set<string>();
+
+    for (const ref of references) {
+      const key = `${ref.type}:${ref.resourceId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      if (ref.type === 'task') {
+        const task = await this.prisma.task.findFirst({
+          where: { id: ref.resourceId, teamId, deletedAt: null },
+          select: { id: true, title: true },
+        });
+        if (!task) {
+          throw new BadRequestException(`Referenced task ${ref.resourceId} not found in this team`);
+        }
+        resolved.push({
+          type: 'task',
+          resourceId: task.id,
+          label: ref.label || task.title,
+          url: `tasks/${task.id}`,
+        });
+      }
+
+      if (ref.type === 'doc') {
+        const doc = await this.prisma.document.findFirst({
+          where: { id: ref.resourceId, teamId, deletedAt: null },
+          select: { id: true, name: true },
+        });
+        if (!doc) {
+          throw new BadRequestException(`Referenced document ${ref.resourceId} not found in this team`);
+        }
+        resolved.push({
+          type: 'doc',
+          resourceId: doc.id,
+          label: ref.label || doc.name,
+          url: `documents/${doc.id}`,
+        });
+      }
+    }
+
+    return resolved;
   }
 
   // ── History (cursor-based pagination) ──────────────────────

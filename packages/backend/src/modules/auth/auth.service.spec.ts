@@ -43,6 +43,9 @@ describe('AuthService', () => {
         create: jest.fn(),
         update: jest.fn(),
       },
+      tenantMember: {
+        findFirst: jest.fn(),
+      },
     };
 
     jwtService = {
@@ -54,7 +57,7 @@ describe('AuthService', () => {
       get: jest.fn().mockImplementation((key: string, defaultValue?: string) => {
         const map: Record<string, string> = {
           'jwt.secret': 'test-secret',
-          'jwt.expiration': '15m',
+          'jwt.expiration': '1d',
           'jwt.refreshExpiration': '7d',
         };
         return map[key] ?? defaultValue;
@@ -185,6 +188,7 @@ describe('AuthService', () => {
       // Set a properly hashed password
       mockUser.passwordHash = bcrypt.hashSync('CorrectPass1', 10);
       mockUser.status = 'ACTIVE';
+      prisma.tenantMember.findFirst.mockResolvedValue({ role: 'MEMBER' });
     });
 
     it('should return tokens for valid credentials with active account', async () => {
@@ -196,6 +200,7 @@ describe('AuthService', () => {
       expect(result.accessToken).toBe('mock-token');
       expect(result.refreshToken).toBe('mock-token');
       expect(result.user.email).toBe(mockUser.email);
+      expect(result.role).toBe('MEMBER');
       expect(prisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: mockUser.id },
@@ -290,11 +295,13 @@ describe('AuthService', () => {
         jti: 'token-jti',
       });
       prisma.user.findUnique.mockResolvedValue(mockUser);
+      prisma.tenantMember.findFirst.mockResolvedValue({ role: 'MEMBER' });
 
       const result = await service.refresh('valid-refresh-token');
 
       expect(result.accessToken).toBe('mock-token');
       expect(result.refreshToken).toBe('mock-token');
+      expect(result.role).toBe('MEMBER');
     });
 
     it('should throw UnauthorizedException when token is not of type "refresh"', async () => {

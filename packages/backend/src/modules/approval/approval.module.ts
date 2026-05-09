@@ -4,8 +4,10 @@ import { ApprovalService } from './approval.service';
 import { ApprovalEngineService } from './approval-engine.service';
 import { ApprovalTemplateService } from './approval-template.service';
 import { ApprovalTimeoutService } from './approval-timeout.service';
+import { RbacModule } from '../rbac/rbac.module';
 
 @Module({
+  imports: [RbacModule],
   controllers: [ApprovalController],
   providers: [
     ApprovalService,

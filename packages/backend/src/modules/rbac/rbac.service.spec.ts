@@ -12,6 +12,7 @@ describe('RbacService', () => {
     prisma = {
       tenantMember: {
         findMany: jest.fn(),
+        findUnique: jest.fn(),
         upsert: jest.fn(),
       },
       teamMember: {
@@ -19,13 +20,27 @@ describe('RbacService', () => {
         findUnique: jest.fn(),
         upsert: jest.fn(),
       },
+      team: {
+        findUnique: jest.fn(),
+        findMany: jest.fn(),
+      },
       docShare: {
         findFirst: jest.fn(),
+        findUnique: jest.fn(),
       },
       approvalTemplate: {
         findUnique: jest.fn(),
       },
+      task: {
+        findUnique: jest.fn(),
+      },
       document: {
+        findUnique: jest.fn(),
+      },
+      approval: {
+        findUnique: jest.fn(),
+      },
+      milestone: {
         findUnique: jest.fn(),
       },
     };
@@ -175,9 +190,12 @@ describe('RbacService', () => {
 
     it('should fall back to tenant role when no team membership', async () => {
       prisma.teamMember.findUnique.mockResolvedValue(null);
-      prisma.tenantMember.findMany.mockResolvedValue([
-        { userId: 'u1', role: Role.ADMIN, tenantId: 'ten1', joinedAt: new Date() },
-      ]);
+      prisma.team.findUnique.mockResolvedValue({
+        id: 't1',
+        tenantId: 'ten1',
+        deletedAt: null,
+      });
+      prisma.tenantMember.findUnique.mockResolvedValue({ role: Role.ADMIN });
 
       const role = await service.getUserTeamRole('u1', 't1');
       expect(role).toBe(Role.ADMIN);
@@ -574,6 +592,93 @@ describe('RbacService', () => {
 
     it('should return null for unknown level', () => {
       expect(service.getRoleFromLevel(999)).toBeNull();
+    });
+  });
+
+  describe('tenant-aware permission evaluation', () => {
+    beforeEach(() => {
+      prisma.tenantMember.findUnique.mockResolvedValue({ role: Role.ADMIN });
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'team-1',
+        tenantId: 'tenant-1',
+        deletedAt: null,
+      });
+      prisma.teamMember.findUnique.mockResolvedValue({ role: Role.GUEST });
+    });
+
+    it('lets tenant admins inherit access to team resources without team membership', async () => {
+      prisma.teamMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.canAccessPermission('task.read', 'user-1', 'tenant-1', {
+          teamId: 'team-1',
+        }),
+      ).resolves.toBe(true);
+    });
+
+    it('rejects cross-tenant team scope even for high tenant roles', async () => {
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'team-foreign',
+        tenantId: 'tenant-2',
+        deletedAt: null,
+      });
+
+      await expect(
+        service.canAccessPermission('task.read', 'user-1', 'tenant-1', {
+          teamId: 'team-foreign',
+        }),
+      ).resolves.toBe(false);
+    });
+
+    it('denies guest users from document write operations', async () => {
+      prisma.tenantMember.findUnique.mockResolvedValue({ role: Role.GUEST });
+      prisma.teamMember.findUnique.mockResolvedValue({ role: Role.GUEST });
+      prisma.document.findUnique.mockResolvedValue({
+        id: 'doc-1',
+        teamId: 'team-1',
+        creatorId: 'owner-1',
+        deletedAt: null,
+        team: {
+          tenantId: 'tenant-1',
+          deletedAt: null,
+        },
+      });
+
+      await expect(
+        service.canAccessPermission('document.update', 'user-1', 'tenant-1', {
+          resourceId: 'doc-1',
+        }),
+      ).resolves.toBe(false);
+    });
+
+    it('allows shared document reads through the unified permission service', async () => {
+      prisma.tenantMember.findUnique.mockResolvedValue({ role: Role.GUEST });
+      prisma.teamMember.findUnique.mockResolvedValue({ role: Role.GUEST });
+      prisma.document.findUnique.mockResolvedValue({
+        id: 'doc-1',
+        teamId: 'team-1',
+        creatorId: 'owner-1',
+        deletedAt: null,
+        team: {
+          tenantId: 'tenant-1',
+          deletedAt: null,
+        },
+      });
+      prisma.docShare.findUnique.mockResolvedValue({
+        id: 'share-1',
+        documentId: 'doc-1',
+        permission: 'view',
+        accessCode: null,
+        expiresAt: null,
+      });
+
+      await expect(
+        service.canAccessPermission('document.read', 'user-1', 'tenant-1', {
+          resourceId: 'doc-1',
+          shareToken: 'share-1',
+          allowDocumentShare: true,
+        }),
+      ).resolves.toBe(true);
     });
   });
 });

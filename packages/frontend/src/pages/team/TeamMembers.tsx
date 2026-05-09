@@ -14,6 +14,7 @@ import {
   List,
   Badge,
   Empty,
+  Select,
 } from 'antd';
 import {
   UserDeleteOutlined,
@@ -37,6 +38,7 @@ import RoleTag from '@/components/member/RoleTag';
 import Loading from '@/components/common/Loading';
 import EmptyState from '@/components/common/EmptyState';
 import type { ITeamMember } from '@saas/shared-types';
+import { Role } from '@saas/shared-types';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -79,6 +81,7 @@ const TeamMembers: React.FC = () => {
   // Remove member state
   const [removeTarget, setRemoveTarget] = useState<TeamMemberRecord | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [updatingRoleUserId, setUpdatingRoleUserId] = useState<string | null>(null);
 
   // Leave team state
   const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
@@ -88,14 +91,15 @@ const TeamMembers: React.FC = () => {
   const { data: joinRequests = [], isLoading: requestsLoading } = useQuery({
     queryKey: ['join-requests', teamId],
     queryFn: () => get<JoinRequestRecord[]>(`/teams/${teamId}/join-requests`),
-    enabled: !!teamId && can('team.update_member_role'),
+    enabled: !!teamId && can('member.update'),
   });
 
   // Permissions
-  const canInvite = can('team.add_member');
-  const canRemove = can('team.remove_member');
-  const canApproveRequests = can('team.update_member_role');
-  const isMember = can('task.view'); // Authenticated team member
+  const canInvite = can('member.create');
+  const canRemove = can('member.delete');
+  const canUpdateRole = can('member.update');
+  const canApproveRequests = can('member.update');
+  const isMember = can('member.read');
   const isOwner = currentTeam?.visibility !== undefined; // Simplified check
 
   // --- Batch invite handlers ---
@@ -191,6 +195,24 @@ const TeamMembers: React.FC = () => {
     [teamId, queryClient]
   );
 
+  const handleUpdateMemberRole = useCallback(
+    async (member: TeamMemberRecord, role: Role) => {
+      if (!teamId || member.role === role) return;
+      setUpdatingRoleUserId(member.userId);
+      try {
+        await patch(`/teams/${teamId}/members/${member.userId}/role`, { role });
+        message.success('成员权限已更新');
+        queryClient.invalidateQueries({ queryKey: ['team-members', teamId] });
+      } catch (error: unknown) {
+        const err = error as { response?: { data?: { message?: string } }; message?: string };
+        message.error(err.response?.data?.message || err.message || '更新成员权限失败');
+      } finally {
+        setUpdatingRoleUserId(null);
+      }
+    },
+    [teamId, queryClient]
+  );
+
   // --- Leave team handler ---
   const handleLeaveTeam = useCallback(async () => {
     if (!teamId) return;
@@ -270,7 +292,31 @@ const TeamMembers: React.FC = () => {
       title: '角色',
       dataIndex: 'role',
       key: 'role',
-      render: (role: ITeamMember['role']) => <RoleTag role={role} />,
+      render: (role: ITeamMember['role'], record: TeamMemberRecord) => {
+        if (
+          canUpdateRole &&
+          record.userId !== currentUser?.id &&
+          record.role !== Role.OWNER
+        ) {
+          return (
+            <Select
+              size="small"
+              value={role}
+              style={{ width: 120 }}
+              loading={updatingRoleUserId === record.userId}
+              onChange={(nextRole) => handleUpdateMemberRole(record, nextRole)}
+              options={[
+                { label: '管理员', value: Role.ADMIN },
+                { label: '负责人', value: Role.LEADER },
+                { label: '成员', value: Role.MEMBER },
+                { label: '只读', value: Role.READER },
+                { label: '访客', value: Role.GUEST },
+              ]}
+            />
+          );
+        }
+        return <RoleTag role={role} />;
+      },
     },
     {
       title: '加入时间',

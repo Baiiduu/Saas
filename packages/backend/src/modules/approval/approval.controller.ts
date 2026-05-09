@@ -19,6 +19,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { CurrentTenant } from '../../common/decorators/current-tenant.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtPayload } from '../auth/strategies/jwt.strategy';
 import { ApprovalService } from './approval.service';
@@ -48,17 +49,22 @@ export class ApprovalController {
   @ApiResponse({ status: 404, description: 'Approval template not found' })
   async create(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Body() dto: CreateApprovalDto,
   ) {
-    return this.approvalService.create(user.sub, dto);
+    return this.approvalService.create(user.sub, tenantId, dto);
   }
 
   @Get('approvals')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'List approvals with pagination and filters' })
   @ApiResponse({ status: 200, description: 'List of approvals returned' })
-  async findAll(@Query() query: QueryApprovalDto) {
-    return this.approvalService.findAll(query);
+  async findAll(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Query() query: QueryApprovalDto,
+  ) {
+    return this.approvalService.findAll(user.sub, tenantId, query);
   }
 
   @Get('approvals/:approvalId')
@@ -67,8 +73,12 @@ export class ApprovalController {
   @ApiParam({ name: 'approvalId', description: 'Approval ID' })
   @ApiResponse({ status: 200, description: 'Approval detail returned' })
   @ApiResponse({ status: 404, description: 'Approval not found' })
-  async findById(@Param('approvalId') approvalId: string) {
-    return this.approvalService.findById(approvalId);
+  async findById(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('approvalId') approvalId: string,
+  ) {
+    return this.approvalService.findById(user.sub, tenantId, approvalId);
   }
 
   // ── Templates ────────────────────────────────────────────────
@@ -80,9 +90,10 @@ export class ApprovalController {
   @ApiResponse({ status: 200, description: 'List of templates returned' })
   async getTemplates(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Query('teamId') teamId?: string,
   ) {
-    return this.approvalService.getTemplates(user.sub, teamId);
+    return this.approvalService.getTemplates(user.sub, tenantId, teamId);
   }
 
   // ── Approval Actions ────────────────────────────────────────
@@ -97,10 +108,11 @@ export class ApprovalController {
   @ApiResponse({ status: 404, description: 'Approval not found' })
   async processAction(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('approvalId') approvalId: string,
     @Body() dto: ApprovalActionDto,
   ) {
-    return this.approvalService.processAction(user.sub, approvalId, dto);
+    return this.approvalService.processAction(user.sub, tenantId, approvalId, dto);
   }
 
   @Get('approvals/:approvalId/actions')
@@ -109,8 +121,12 @@ export class ApprovalController {
   @ApiParam({ name: 'approvalId', description: 'Approval ID' })
   @ApiResponse({ status: 200, description: 'Action history returned' })
   @ApiResponse({ status: 404, description: 'Approval not found' })
-  async getActionHistory(@Param('approvalId') approvalId: string) {
-    return this.approvalService.getActionHistory(approvalId);
+  async getActionHistory(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('approvalId') approvalId: string,
+  ) {
+    return this.approvalService.getActionHistory(user.sub, tenantId, approvalId);
   }
 
   // ── Template Management ─────────────────────────────────────
@@ -123,9 +139,10 @@ export class ApprovalController {
   @ApiResponse({ status: 400, description: 'Invalid template data' })
   async createTemplate(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Body() dto: CreateTemplateDto,
   ) {
-    return this.approvalService.createTemplate(user.sub, dto);
+    return this.approvalService.createTemplate(user.sub, tenantId, dto);
   }
 
   @Get('approval-templates/:templateId')
@@ -134,8 +151,12 @@ export class ApprovalController {
   @ApiParam({ name: 'templateId', description: 'Template ID' })
   @ApiResponse({ status: 200, description: 'Template detail returned' })
   @ApiResponse({ status: 404, description: 'Template not found' })
-  async getTemplateById(@Param('templateId') templateId: string) {
-    return this.approvalService.getTemplateById(templateId);
+  async getTemplateById(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('templateId') templateId: string,
+  ) {
+    return this.approvalService.getTemplateById(user.sub, tenantId, templateId);
   }
 
   @Patch('approval-templates/:templateId')
@@ -156,10 +177,12 @@ export class ApprovalController {
   @ApiResponse({ status: 200, description: 'Template updated' })
   @ApiResponse({ status: 404, description: 'Template not found' })
   async updateTemplate(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('templateId') templateId: string,
     @Body() data: { name?: string; description?: string; scope?: string; formFields?: Record<string, any> },
   ) {
-    return this.approvalService.updateTemplate(templateId, data);
+    return this.approvalService.updateTemplate(user.sub, tenantId, templateId, data);
   }
 
   @Delete('approval-templates/:templateId')
@@ -168,8 +191,12 @@ export class ApprovalController {
   @ApiParam({ name: 'templateId', description: 'Template ID' })
   @ApiResponse({ status: 204, description: 'Template deleted' })
   @ApiResponse({ status: 404, description: 'Template not found' })
-  async deleteTemplate(@Param('templateId') templateId: string) {
-    await this.approvalService.deleteTemplate(templateId);
+  async deleteTemplate(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('templateId') templateId: string,
+  ) {
+    await this.approvalService.deleteTemplate(user.sub, tenantId, templateId);
   }
 
   // ── Timeout Reminder ────────────────────────────────────────

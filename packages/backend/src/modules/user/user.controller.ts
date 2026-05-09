@@ -6,6 +6,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { TenantOptional } from '../../common/decorators/tenant-optional.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtPayload } from '../auth/strategies/jwt.strategy';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -13,6 +14,7 @@ import { UserService } from './user.service';
 
 @ApiTags('User')
 @ApiBearerAuth('access-token')
+@TenantOptional()
 @Controller('user')
 export class UserController {
   constructor(private readonly userService: UserService) {}

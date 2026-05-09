@@ -17,6 +17,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { TenantOptional } from '../../common/decorators/tenant-optional.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtPayload } from '../auth/strategies/jwt.strategy';
 import { TenantService } from './tenant.service';
@@ -27,6 +28,7 @@ import { UpdateQuotaDto } from './dto/quota.dto';
 
 @ApiTags('Tenant')
 @ApiBearerAuth('access-token')
+@TenantOptional()
 @Controller('tenants')
 export class TenantController {
   constructor(private readonly tenantService: TenantService) {}
@@ -49,8 +51,8 @@ export class TenantController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'List all active tenants' })
   @ApiResponse({ status: 200, description: 'List of tenants returned' })
-  async findAll() {
-    return this.tenantService.findAll();
+  async findAll(@CurrentUser() user: JwtPayload) {
+    return this.tenantService.findAll(user.sub);
   }
 
   @Get(':id')
@@ -59,8 +61,11 @@ export class TenantController {
   @ApiParam({ name: 'id', description: 'Tenant ID' })
   @ApiResponse({ status: 200, description: 'Tenant returned' })
   @ApiResponse({ status: 404, description: 'Tenant not found' })
-  async findById(@Param('id') id: string) {
-    return this.tenantService.findById(id);
+  async findById(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.tenantService.findById(id, user.sub);
   }
 
   @Patch(':id')
@@ -85,8 +90,11 @@ export class TenantController {
   @ApiParam({ name: 'id', description: 'Tenant ID' })
   @ApiResponse({ status: 200, description: 'Members returned' })
   @ApiResponse({ status: 404, description: 'Tenant not found' })
-  async getMembers(@Param('id') id: string) {
-    return this.tenantService.getMembers(id);
+  async getMembers(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.tenantService.getMembers(id, user.sub);
   }
 
   // ── Invitations ─────────────────────────────────────────────
@@ -152,8 +160,11 @@ export class TenantController {
   @ApiOperation({ summary: 'Get quota usage for the enterprise' })
   @ApiParam({ name: 'id', description: 'Tenant ID' })
   @ApiResponse({ status: 200, description: 'Quota info returned' })
-  async getQuota(@Param('id') id: string) {
-    return this.tenantService.getQuota(id);
+  async getQuota(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.tenantService.getQuota(id, user.sub);
   }
 
   @Patch(':id/quota')
@@ -175,6 +186,7 @@ export class TenantController {
 // Separate controller for invitation acceptance (outside /tenants scope)
 @ApiTags('Invitations')
 @ApiBearerAuth('access-token')
+@TenantOptional()
 @Controller('invitations')
 export class InvitationController {
   constructor(private readonly tenantService: TenantService) {}

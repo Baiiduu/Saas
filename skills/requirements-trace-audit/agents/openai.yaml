@@ -1,0 +1,4 @@
+interface:
+  display_name: "需求落实审计"
+  short_description: "检查需求文档是否真实落实到项目实现与验收链路中"
+  default_prompt: "Use $requirements-trace-audit to audit whether a requirements document has been truly implemented in the project."

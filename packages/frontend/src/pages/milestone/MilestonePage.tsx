@@ -11,43 +11,6 @@ import { getMilestones, createMilestone } from '@/services/milestoneService';
 
 const { Title } = Typography;
 
-// Demo data for milestones
-const demoMilestones: IMilestone[] = [
-  {
-    id: 'ms-1',
-    name: 'V1.0 基础功能',
-    description: '用户认证、任务管理、文档管理等核心功能',
-    dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-    status: 'active',
-    teamId: '',
-    progress: 65,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: 'ms-2',
-    name: 'V1.1 审批流程',
-    description: '审批模块开发与集成',
-    dueDate: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
-    status: 'active',
-    teamId: '',
-    progress: 30,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: 'ms-3',
-    name: 'V1.0 发布上线',
-    description: '完成 V1.0 版本发布',
-    dueDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-    status: 'completed',
-    teamId: '',
-    progress: 100,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-];
-
 const MilestonePage: React.FC = () => {
   const { orgId, teamId } = useParams<{ orgId: string; teamId: string }>();
   const navigate = useNavigate();
@@ -55,18 +18,20 @@ const MilestonePage: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [milestones, setMilestones] = useState<IMilestone[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Fetch milestones from API on mount
   useEffect(() => {
     if (!teamId) return;
     const fetchMilestones = async () => {
       setLoading(true);
+      setLoadError(null);
       try {
         const data = await getMilestones(teamId);
         setMilestones(data.items || []);
       } catch {
-        // Fallback to demo data if API call fails
-        setMilestones(demoMilestones);
+        setMilestones([]);
+        setLoadError('获取里程碑失败');
       } finally {
         setLoading(false);
       }
@@ -114,9 +79,7 @@ const MilestonePage: React.FC = () => {
   }, []);
 
   const groupedMilestones = useMemo(() => {
-    const active = milestones.filter(
-      (m) => m.status === 'active' || m.status === 'overdue'
-    );
+    const active = milestones.filter((m) => m.status === 'active' || m.status === 'overdue');
     const completed = milestones.filter((m) => m.status === 'completed');
     return { active, completed };
   }, [milestones]);
@@ -125,6 +88,10 @@ const MilestonePage: React.FC = () => {
 
   if (loading) {
     return <Loading tip="加载里程碑..." />;
+  }
+
+  if (loadError) {
+    return <EmptyState title="加载失败" description={loadError} />;
   }
 
   return (
@@ -210,7 +177,11 @@ const MilestonePage: React.FC = () => {
           <Form.Item name="description" label="描述">
             <Input.TextArea rows={3} placeholder="里程碑描述..." />
           </Form.Item>
-          <Form.Item name="dueDate" label="截止日期">
+          <Form.Item
+            name="dueDate"
+            label="截止日期"
+            rules={[{ required: true, message: '请选择截止日期' }]}
+          >
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
         </Form>

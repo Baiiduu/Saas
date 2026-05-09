@@ -19,10 +19,11 @@ export interface AuditLogFilter {
   tenantId?: string;
   dateFrom?: string;
   dateTo?: string;
-  page?: number;
-  limit?: number;
+  page?: number | string;
+  limit?: number | string;
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
+  format?: 'csv' | 'json';
 }
 
 @Injectable()
@@ -94,6 +95,9 @@ export class AuditService {
       sortOrder = 'desc',
     } = filter;
 
+    const normalizedPage = this.normalizePositiveInt(page, 1);
+    const normalizedLimit = this.normalizePositiveInt(limit, 20);
+
     const where: any = {};
 
     if (userId) where.userId = userId;
@@ -111,13 +115,13 @@ export class AuditService {
     const field = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : 'createdAt';
     const order: 'asc' | 'desc' = sortOrder === 'asc' ? 'asc' : 'desc';
 
-    const skip = (page - 1) * limit;
+    const skip = (normalizedPage - 1) * normalizedLimit;
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.auditLog.findMany({
         where,
         skip,
-        take: limit,
+        take: normalizedLimit,
         orderBy: { [field]: order },
         include: {
           user: {
@@ -136,9 +140,9 @@ export class AuditService {
     return {
       items,
       total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
+      page: normalizedPage,
+      limit: normalizedLimit,
+      totalPages: Math.ceil(total / normalizedLimit),
     };
   }
 
@@ -152,7 +156,7 @@ export class AuditService {
     format: 'csv' | 'json';
     data: any[];
   }> {
-    const { format = 'json' } = filter as any;
+    const format = filter.format === 'csv' ? 'csv' : 'json';
 
     const where: any = {};
     if (filter.userId) where.userId = filter.userId;
@@ -199,5 +203,13 @@ export class AuditService {
 
     this.logger.log(`Audit log export: ${data.length} records (${format})`);
     return { format, data };
+  }
+
+  private normalizePositiveInt(value: number | string | undefined, fallback: number): number {
+    const parsed = typeof value === 'string' ? Number.parseInt(value, 10) : value;
+    if (!parsed || Number.isNaN(parsed) || parsed <= 0) {
+      return fallback;
+    }
+    return parsed;
   }
 }

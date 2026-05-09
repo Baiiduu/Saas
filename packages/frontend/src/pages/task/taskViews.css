@@ -1,0 +1,146 @@
+.task-view-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.task-view-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.task-view-alert {
+  margin-bottom: 0;
+}
+
+.task-gantt-shell,
+.task-calendar-shell {
+  border-radius: 20px;
+  border: 1px solid #e7ebf3;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.06);
+}
+
+.task-gantt-shell .ant-card-body,
+.task-calendar-shell .ant-card-body {
+  padding: 18px;
+}
+
+.task-gantt-shell .gantt-container {
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.task-gantt-shell .gantt-container .horizontalContainer {
+  scrollbar-gutter: stable both-edges;
+}
+
+.task-gantt-shell svg {
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+.task-gantt-list {
+  background: #fbfcfe;
+}
+
+.task-gantt-list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 1px solid #eef2f8;
+  background: transparent;
+  color: #23314f;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-gantt-list-row:hover,
+.task-gantt-list-row.is-selected {
+  background: #eef4ff;
+}
+
+.task-gantt-list-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.task-gantt-list-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-calendar-shell .fc {
+  --fc-border-color: #e7ebf3;
+  --fc-page-bg-color: #fff;
+  --fc-neutral-bg-color: #f7f9fc;
+  --fc-list-event-hover-bg-color: #f0f5ff;
+  --fc-today-bg-color: rgba(43, 108, 246, 0.08);
+}
+
+.task-calendar-shell .fc .fc-toolbar {
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.task-calendar-shell .fc .fc-toolbar-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #14213d;
+}
+
+.task-calendar-shell .fc .fc-button {
+  background: #14213d;
+  border-color: #14213d;
+  box-shadow: none;
+}
+
+.task-calendar-shell .fc .fc-button:hover,
+.task-calendar-shell .fc .fc-button:focus {
+  background: #2b6cf6;
+  border-color: #2b6cf6;
+}
+
+.task-calendar-shell .fc .fc-button-primary:not(:disabled).fc-button-active {
+  background: #2b6cf6;
+  border-color: #2b6cf6;
+}
+
+.task-calendar-shell .fc .fc-col-header-cell-cushion,
+.task-calendar-shell .fc .fc-daygrid-day-number {
+  color: #23314f;
+}
+
+.task-calendar-shell .fc .fc-event {
+  border-radius: 10px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.task-calendar-shell .fc .fc-list-event-title,
+.task-calendar-shell .fc .fc-event-time {
+  color: #23314f;
+}
+
+@media (max-width: 768px) {
+  .task-calendar-shell .fc .fc-toolbar-title {
+    font-size: 16px;
+  }
+
+  .task-calendar-shell .fc .fc-toolbar.fc-header-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .task-calendar-shell .fc .fc-toolbar-chunk {
+    display: flex;
+    justify-content: center;
+  }
+}

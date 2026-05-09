@@ -26,6 +26,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { CurrentTenant } from '../../common/decorators/current-tenant.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { JwtPayload } from '../auth/strategies/jwt.strategy';
@@ -52,10 +53,12 @@ export class DocumentController {
   @ApiQuery({ name: 'parentId', required: false, example: '550e8400-e29b-41d4-a716-446655440000', description: 'Parent folder ID (omit for root)' })
   @ApiResponse({ status: 200, description: 'Document tree or list' })
   async list(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Query('teamId') teamId: string,
     @Query('parentId') parentId?: string,
   ) {
-    return this.documentService.getTree(teamId, parentId ?? undefined);
+    return this.documentService.getTree(user.sub, tenantId, teamId, parentId ?? undefined);
   }
 
   @Get('search')
@@ -65,9 +68,24 @@ export class DocumentController {
   @ApiQuery({ name: 'teamId', required: true, description: 'Team ID' })
   @ApiResponse({ status: 200, description: 'Search results ranked by relevance' })
   async search(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Query() searchDto: SearchDocumentDto,
   ) {
-    return this.documentSearchService.search(searchDto.teamId, searchDto.q);
+    return this.documentSearchService.search(
+      user.sub,
+      tenantId,
+      searchDto.teamId,
+      searchDto.q,
+      {
+        creatorId: searchDto.creatorId,
+        createdFrom: searchDto.createdFrom,
+        createdTo: searchDto.createdTo,
+        updatedFrom: searchDto.updatedFrom,
+        updatedTo: searchDto.updatedTo,
+        limit: searchDto.limit,
+      },
+    );
   }
 
   @Post()
@@ -95,14 +113,15 @@ export class DocumentController {
   @UseInterceptors(FileInterceptor('file'))
   async create(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Body() dto: CreateDocumentDto,
     @UploadedFile() file?: any,
   ) {
     if (dto.type === 'FOLDER') {
-      return this.documentService.createFolder(user.sub, dto);
+      return this.documentService.createFolder(user.sub, tenantId, dto);
     }
     // file is required for FILE type - FileInterceptor provides it
-    return this.documentService.uploadFile(user.sub, file, dto);
+    return this.documentService.uploadFile(user.sub, tenantId, file, dto);
   }
 
   @Get(':docId')
@@ -111,8 +130,14 @@ export class DocumentController {
   @ApiParam({ name: 'docId', description: 'Document ID' })
   @ApiResponse({ status: 200, description: 'Document detail' })
   @ApiResponse({ status: 404, description: 'Document not found' })
-  async findById(@Param('docId') docId: string) {
-    return this.documentService.findById(docId);
+  async findById(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('docId') docId: string,
+    @Query('shareToken') shareToken?: string,
+    @Query('accessCode') accessCode?: string,
+  ) {
+    return this.documentService.findById(user.sub, tenantId, docId, shareToken, accessCode);
   }
 
   @Get(':docId/preview')
@@ -121,8 +146,14 @@ export class DocumentController {
   @ApiParam({ name: 'docId', description: 'Document ID' })
   @ApiResponse({ status: 200, description: 'Document preview info with previewType' })
   @ApiResponse({ status: 404, description: 'Document not found' })
-  async preview(@Param('docId') docId: string) {
-    return this.documentService.preview(docId);
+  async preview(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('docId') docId: string,
+    @Query('shareToken') shareToken?: string,
+    @Query('accessCode') accessCode?: string,
+  ) {
+    return this.documentService.preview(user.sub, tenantId, docId, shareToken, accessCode);
   }
 
   @Get(':docId/content')
@@ -131,8 +162,14 @@ export class DocumentController {
   @ApiParam({ name: 'docId', description: 'Document ID' })
   @ApiResponse({ status: 200, description: 'Document content returned' })
   @ApiResponse({ status: 404, description: 'Document not found' })
-  async getContent(@Param('docId') docId: string) {
-    return this.documentService.getContent(docId);
+  async getContent(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('docId') docId: string,
+    @Query('shareToken') shareToken?: string,
+    @Query('accessCode') accessCode?: string,
+  ) {
+    return this.documentService.getContent(user.sub, tenantId, docId, shareToken, accessCode);
   }
 
   @Patch(':docId/content')
@@ -153,9 +190,12 @@ export class DocumentController {
   async saveContent(
     @Param('docId') docId: string,
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Body('content') content: string,
+    @Body('shareToken') shareToken?: string,
+    @Body('accessCode') accessCode?: string,
   ) {
-    return this.documentService.saveContent(docId, user.sub, content);
+    return this.documentService.saveContent(docId, user.sub, tenantId, content, shareToken, accessCode);
   }
 
   @Get(':docId/file')
@@ -164,8 +204,15 @@ export class DocumentController {
   @ApiParam({ name: 'docId', description: 'Document ID' })
   @ApiResponse({ status: 200, description: 'File stream returned with correct Content-Type' })
   @ApiResponse({ status: 404, description: 'Document or file not found' })
-  async getFile(@Param('docId') docId: string, @Res() res: Response) {
-    const fileInfo = await this.documentService.getFile(docId);
+  async getFile(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('docId') docId: string,
+    @Res() res: Response,
+    @Query('shareToken') shareToken?: string,
+    @Query('accessCode') accessCode?: string,
+  ) {
+    const fileInfo = await this.documentService.getFile(user.sub, tenantId, docId, shareToken, accessCode);
     
     const { existsSync, createReadStream } = require('fs');
     
@@ -199,9 +246,10 @@ export class DocumentController {
   async update(
     @Param('docId') docId: string,
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Body() data: { name?: string; parentId?: string | null },
   ) {
-    return this.documentService.update(docId, user.sub, data);
+    return this.documentService.update(docId, user.sub, tenantId, data);
   }
 
   @Delete(':docId')
@@ -214,8 +262,9 @@ export class DocumentController {
   async delete(
     @Param('docId') docId: string,
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
   ) {
-    await this.documentService.delete(docId, user.sub);
+    await this.documentService.delete(docId, user.sub, tenantId);
   }
 
   @Post(':docId/share')
@@ -228,9 +277,10 @@ export class DocumentController {
   async createShare(
     @Param('docId') docId: string,
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Body() dto: ShareDocumentDto,
   ) {
-    return this.documentService.createShare(docId, user.sub, dto);
+    return this.documentService.createShare(docId, user.sub, tenantId, dto);
   }
 
   @Public()
@@ -257,8 +307,14 @@ export class DocumentController {
   @ApiParam({ name: 'docId', description: 'Document ID' })
   @ApiResponse({ status: 200, description: 'Versions returned' })
   @ApiResponse({ status: 404, description: 'Document not found' })
-  async listVersions(@Param('docId') docId: string) {
-    return this.documentService.listVersions(docId);
+  async listVersions(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('docId') docId: string,
+    @Query('shareToken') shareToken?: string,
+    @Query('accessCode') accessCode?: string,
+  ) {
+    return this.documentService.listVersions(user.sub, tenantId, docId, shareToken, accessCode);
   }
 
   @Get(':docId/versions/:versionId')
@@ -269,10 +325,14 @@ export class DocumentController {
   @ApiResponse({ status: 200, description: 'Version detail returned' })
   @ApiResponse({ status: 404, description: 'Version not found' })
   async getVersion(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('docId') docId: string,
     @Param('versionId') versionId: string,
+    @Query('shareToken') shareToken?: string,
+    @Query('accessCode') accessCode?: string,
   ) {
-    return this.documentService.getVersion(docId, versionId);
+    return this.documentService.getVersion(user.sub, tenantId, docId, versionId, shareToken, accessCode);
   }
 
   @Post(':docId/versions')
@@ -286,9 +346,10 @@ export class DocumentController {
   async createVersion(
     @Param('docId') docId: string,
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Body() dto?: CreateVersionDto,
   ) {
-    return this.documentService.createVersion(docId, user.sub, dto);
+    return this.documentService.createVersion(docId, user.sub, tenantId, dto);
   }
 
   @Post(':docId/versions/:versionId/rollback')
@@ -303,8 +364,9 @@ export class DocumentController {
     @Param('docId') docId: string,
     @Param('versionId') versionId: string,
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
   ) {
-    return this.documentService.rollbackToVersion(docId, versionId, user.sub);
+    return this.documentService.rollbackToVersion(docId, versionId, user.sub, tenantId);
   }
 
   @Delete(':docId/versions/:versionId')
@@ -320,7 +382,8 @@ export class DocumentController {
     @Param('docId') docId: string,
     @Param('versionId') versionId: string,
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
   ) {
-    await this.documentService.deleteVersion(docId, versionId, user.sub);
+    await this.documentService.deleteVersion(docId, versionId, user.sub, tenantId);
   }
 }

@@ -54,10 +54,10 @@ export const useAuthStore = create<AuthState & AuthActions>()(
         }),
 
       setUser: (user, role) =>
-        set({
+        set((state) => ({
           user,
-          role: role ?? null,
-        }),
+          role: role === undefined ? state.role : role ?? null,
+        })),
 
       setTenant: (tenant) =>
         set({ tenant }),

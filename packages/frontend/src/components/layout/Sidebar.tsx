@@ -136,12 +136,16 @@ const Sidebar: React.FC = () => {
       icon: <AppstoreOutlined />,
       label: '团队仪表盘',
     },
-    {
-      key: 'llm-chat',
-      icon: <RobotOutlined />,
-      label: 'AI 助手',
-    },
-    ...(can('notification.view')
+    ...(can('llm.read')
+      ? [
+          {
+            key: 'llm-chat',
+            icon: <RobotOutlined />,
+            label: 'AI 助手',
+          },
+        ]
+      : []),
+    ...(can('notification.read')
       ? [
           {
             key: 'notifications',
@@ -150,7 +154,7 @@ const Sidebar: React.FC = () => {
           },
         ]
       : []),
-    ...(can('task.view')
+    ...(can('task.read')
       ? [
           {
             key: 'tasks',
@@ -174,7 +178,7 @@ const Sidebar: React.FC = () => {
           },
         ]
       : []),
-    ...(can('document.view')
+    ...(can('document.read')
       ? [
           {
             key: 'documents',
@@ -183,7 +187,7 @@ const Sidebar: React.FC = () => {
           },
         ]
       : []),
-    ...(can('approval.view')
+    ...(can('approval.read')
       ? [
           {
             key: 'approvals',
@@ -197,7 +201,7 @@ const Sidebar: React.FC = () => {
           },
         ]
       : []),
-    ...(can('message.view')
+    ...(can('message.read')
       ? [
           {
             key: 'messages',
@@ -206,7 +210,7 @@ const Sidebar: React.FC = () => {
           },
         ]
       : []),
-    ...(can('milestone.view')
+    ...(can('milestone.read')
       ? [
           {
             key: 'milestones',
@@ -215,12 +219,12 @@ const Sidebar: React.FC = () => {
           },
         ]
       : []),
-    ...(can('resource.view')
+    ...(can('graph.read')
       ? [
           {
             key: 'graph',
             icon: <ApartmentOutlined />,
-            label: '资源图谱',
+            label: '资源画布',
           },
         ]
       : []),

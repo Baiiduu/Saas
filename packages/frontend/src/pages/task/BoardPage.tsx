@@ -76,6 +76,16 @@ const BoardPage: React.FC = () => {
       }
     });
 
+    Object.values(grouped).forEach((columnTasks) => {
+      columnTasks.sort((a, b) => {
+        const sortDelta = (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+        if (sortDelta !== 0) {
+          return sortDelta;
+        }
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      });
+    });
+
     return STATUS_ORDER
       .filter((status) => {
         const config = columnConfigs.find((c) => c.status === status);
@@ -113,22 +123,45 @@ const BoardPage: React.FC = () => {
       if (!over) return;
 
       const taskId = active.id as string;
-      const targetColumnId = over.id as string;
+      const overId = over.id as string;
 
-      // Determine the target status from column id
-      const targetStatus = STATUS_ORDER.find((s) => s === targetColumnId);
+      // Dropping over a card yields that task id, while dropping over an empty
+      // column yields the column status id. Resolve both forms to a target column.
+      const targetStatus =
+        STATUS_ORDER.find((status) => status === overId) ??
+        tasks.find((task) => task.id === overId)?.status;
       if (!targetStatus) return;
 
       const draggedTask = tasks.find((t) => t.id === taskId);
-      if (!draggedTask || draggedTask.status === targetStatus) return;
+      if (!draggedTask) return;
 
-      const targetTasks = columns.find((c) => c.status === targetStatus)?.tasks ?? [];
-      const newSortOrder = targetTasks.length;
+      const targetTasks = [...(columns.find((c) => c.status === targetStatus)?.tasks ?? [])];
+      const sourceTasks = [...(columns.find((c) => c.status === draggedTask.status)?.tasks ?? [])];
+      const isSameColumn = draggedTask.status === targetStatus;
+
+      const sourceIndex = sourceTasks.findIndex((task) => task.id === taskId);
+      let targetIndex =
+        STATUS_ORDER.includes(overId as TaskStatus)
+          ? targetTasks.length
+          : targetTasks.findIndex((task) => task.id === overId);
+
+      if (targetIndex < 0) {
+        targetIndex = targetTasks.length;
+      }
+
+      if (isSameColumn) {
+        if (sourceIndex < 0) return;
+        if (overId === taskId) return;
+        if (targetIndex > sourceIndex) {
+          targetIndex -= 1;
+        }
+        if (targetIndex === sourceIndex) return;
+      }
 
       try {
         await updatePositionMutation.mutateAsync({
           id: taskId,
-          sortOrder: newSortOrder,
+          sortOrder: targetIndex,
           status: targetStatus,
         });
         message.success('任务状态已更新');
@@ -232,7 +265,7 @@ const BoardPage: React.FC = () => {
 
         <DragOverlay>
           {activeTask ? (
-            <TaskCard task={activeTask} style={{ width: 280 }} />
+            <TaskCard task={activeTask} style={{ width: 280 }} sortable={false} />
           ) : null}
         </DragOverlay>
       </DndContext>

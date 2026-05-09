@@ -14,6 +14,7 @@ describe('RbacController', () => {
 
   beforeEach(async () => {
     rbacService = {
+      canAccessPermission: jest.fn(),
       checkPermission: jest.fn(),
       getUserHighestRole: jest.fn(),
       getUserTenantRole: jest.fn(),
@@ -61,6 +62,29 @@ describe('RbacController', () => {
       );
 
       expect(result).toEqual({ allowed: false });
+    });
+
+    it('should use tenant-aware permission checks when tenant context exists', async () => {
+      rbacService.canAccessPermission.mockResolvedValue(true);
+
+      const result = await controller.checkPermission(
+        { user: mockUser, tenantId: 'tenant-1' },
+        {
+          resourceType: 'task',
+          operation: 'create',
+          teamId: 'team-1',
+          resourceId: 'task-1',
+        },
+      );
+
+      expect(result).toEqual({ allowed: true });
+      expect(rbacService.canAccessPermission).toHaveBeenCalledWith(
+        'task.create',
+        'user-1',
+        'tenant-1',
+        { resourceId: 'task-1', teamId: 'team-1' },
+      );
+      expect(rbacService.checkPermission).not.toHaveBeenCalled();
     });
 
     it('should throw UnauthorizedException when no user', async () => {

@@ -1,28 +1,47 @@
-import React, { useMemo, useState, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { Typography, Button, Space, Tag, Badge, Calendar } from 'antd';
+import React, { useMemo } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import FullCalendar from '@fullcalendar/react';
+import dayGridPlugin from '@fullcalendar/daygrid';
+import timeGridPlugin from '@fullcalendar/timegrid';
+import interactionPlugin from '@fullcalendar/interaction';
+import listPlugin from '@fullcalendar/list';
+import zhCnLocale from '@fullcalendar/core/locales/zh-cn';
+import type { EventClickArg, EventInput } from '@fullcalendar/core';
+import { Alert, Button, Card, Space, Tag, Typography } from 'antd';
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import type { Dayjs } from 'dayjs';
 import { TaskStatus } from '@saas/shared-types';
 import { useTasks } from '@/hooks/useTasks';
 import { teamSubPath } from '@/router/routes';
 import Loading from '@/components/common/Loading';
 import EmptyState from '@/components/common/EmptyState';
+import './taskViews.css';
 
 const { Title, Text } = Typography;
 
-const statusColorMap: Record<TaskStatus, string> = {
-  [TaskStatus.TODO]: 'default',
-  [TaskStatus.IN_PROGRESS]: 'processing',
-  [TaskStatus.DONE]: 'success',
-  [TaskStatus.CLOSED]: 'warning',
-};
-
-const statusLabelMap: Record<TaskStatus, string> = {
-  [TaskStatus.TODO]: '待办',
-  [TaskStatus.IN_PROGRESS]: '进行中',
-  [TaskStatus.DONE]: '已完成',
-  [TaskStatus.CLOSED]: '已关闭',
+const statusMeta: Record<
+  TaskStatus,
+  { label: string; color: string; badgeColor: string }
+> = {
+  [TaskStatus.TODO]: {
+    label: '待办',
+    color: '#7c8799',
+    badgeColor: 'default',
+  },
+  [TaskStatus.IN_PROGRESS]: {
+    label: '进行中',
+    color: '#2b6cf6',
+    badgeColor: 'processing',
+  },
+  [TaskStatus.DONE]: {
+    label: '已完成',
+    color: '#1f9d55',
+    badgeColor: 'success',
+  },
+  [TaskStatus.CLOSED]: {
+    label: '已关闭',
+    color: '#c9861a',
+    badgeColor: 'warning',
+  },
 };
 
 const CalendarPage: React.FC = () => {
@@ -31,68 +50,46 @@ const CalendarPage: React.FC = () => {
 
   const { data, isLoading, isError, error } = useTasks({
     teamId,
-    limit: 200,
+    limit: 300,
+    sortBy: 'dueDate',
+    sortOrder: 'asc',
   });
 
-  const tasks = data?.items ?? [];
+  const events = useMemo<EventInput[]>(() => {
+    return (data?.items ?? [])
+      .filter((task) => task.dueDate)
+      .map((task) => {
+        const meta = statusMeta[task.status];
 
-  const tasksByDate = useMemo(() => {
-    const map = new Map<string, typeof tasks>();
-    tasks.forEach((task) => {
-      if (task.dueDate) {
-        const dateKey = task.dueDate.split('T')[0];
-        if (!map.has(dateKey)) map.set(dateKey, []);
-        map.get(dateKey)!.push(task);
-      }
-    });
-    return map;
-  }, [tasks]);
-
-  const dateCellRender = useCallback(
-    (date: Dayjs) => {
-      const key = date.format('YYYY-MM-DD');
-      const dayTasks = tasksByDate.get(key);
-      if (!dayTasks || dayTasks.length === 0) return null;
-
-      return (
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-          {dayTasks.slice(0, 3).map((task) => (
-            <li
-              key={task.id}
-              style={{
-                fontSize: 11,
-                padding: '1px 4px',
-                cursor: 'pointer',
-                borderRadius: 2,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-              onClick={() =>
-                navigate(teamSubPath(orgId!, teamId!, `tasks/${task.id}`))
-              }
-            >
-              <Badge
-                status={statusColorMap[task.status] as 'default' | 'processing' | 'success' | 'warning'}
-                text={task.title}
-              />
-            </li>
-          ))}
-          {dayTasks.length > 3 && (
-            <li style={{ fontSize: 11, color: '#999', paddingLeft: 4 }}>
-              +{dayTasks.length - 3} 更多
-            </li>
-          )}
-        </ul>
-      );
-    },
-    [tasksByDate, navigate, orgId, teamId]
-  );
+        return {
+          id: task.id,
+          title: task.title,
+          start: task.dueDate!,
+          allDay: true,
+          backgroundColor: `${meta.color}18`,
+          borderColor: meta.color,
+          textColor: '#14213d',
+          extendedProps: {
+            status: task.status,
+            priority: task.priority,
+            assigneeId: task.assigneeId,
+          },
+        } satisfies EventInput;
+      });
+  }, [data]);
 
   const handleBack = () => {
     if (orgId && teamId) {
       navigate(teamSubPath(orgId, teamId, 'board'));
     }
+  };
+
+  const handleEventClick = (arg: EventClickArg) => {
+    if (!orgId || !teamId) {
+      return;
+    }
+
+    navigate(teamSubPath(orgId, teamId, `tasks/${arg.event.id}`));
   };
 
   if (!orgId || !teamId) return null;
@@ -107,30 +104,67 @@ const CalendarPage: React.FC = () => {
   }
 
   return (
-    <div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: 16,
-        }}
-      >
-        <Space>
+    <div className="task-view-page">
+      <div className="task-view-header">
+        <Space size={12}>
           <Button icon={<ArrowLeftOutlined />} onClick={handleBack}>
             返回看板
           </Button>
-          <Title level={4} style={{ margin: 0 }}>
-            日历视图
-          </Title>
+          <div>
+            <Title level={4} style={{ margin: 0 }}>
+              日历视图
+            </Title>
+            <Text type="secondary">
+              展示所有具备截止日期的任务，支持月、周、日和清单视图。
+            </Text>
+          </div>
+        </Space>
+        <Space size={8} wrap>
+          {Object.entries(statusMeta).map(([status, meta]) => (
+            <Tag key={status} color={meta.badgeColor}>
+              {meta.label}
+            </Tag>
+          ))}
         </Space>
       </div>
 
-      <div style={{ background: '#fff', padding: 16, borderRadius: 8, border: '1px solid #f0f0f0' }}>
-        <Calendar
-          cellRender={(date) => dateCellRender(date as Dayjs)}
-        />
-      </div>
+      <Alert
+        type="info"
+        showIcon
+        className="task-view-alert"
+        message="日历仅展示带有截止日期的任务。点击事件可直接进入任务详情。"
+      />
+
+      {events.length === 0 ? (
+        <EmptyState title="暂无日历数据" description="请先为任务设置截止日期。" />
+      ) : (
+        <Card className="task-calendar-shell" bordered={false}>
+          <FullCalendar
+            plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin, listPlugin]}
+            locale={zhCnLocale}
+            initialView="dayGridMonth"
+            headerToolbar={{
+              left: 'prev,next today',
+              center: 'title',
+              right: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek',
+            }}
+            buttonText={{
+              today: '今天',
+              month: '月',
+              week: '周',
+              day: '日',
+              list: '清单',
+            }}
+            height="auto"
+            expandRows
+            dayMaxEvents={4}
+            eventDisplay="block"
+            eventClick={handleEventClick}
+            events={events}
+            firstDay={1}
+          />
+        </Card>
+      )}
     </div>
   );
 };

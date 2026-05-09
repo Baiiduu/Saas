@@ -19,6 +19,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { CurrentTenant } from '../../common/decorators/current-tenant.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtPayload } from '../auth/strategies/jwt.strategy';
 import { TaskService } from './task.service';
@@ -50,17 +51,22 @@ export class TaskController {
   @ApiResponse({ status: 404, description: 'Team not found' })
   async create(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Body() dto: CreateTaskDto,
   ) {
-    return this.taskService.create(user.sub, dto);
+    return this.taskService.create(user.sub, tenantId, dto);
   }
 
   @Get()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'List tasks with pagination, filter, and sort' })
   @ApiResponse({ status: 200, description: 'List of tasks returned' })
-  async findAll(@Query() query: QueryTaskDto) {
-    return this.taskService.findAll(query);
+  async findAll(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Query() query: QueryTaskDto,
+  ) {
+    return this.taskService.findAll(user.sub, tenantId, query);
   }
 
   @Get(':taskId')
@@ -69,8 +75,12 @@ export class TaskController {
   @ApiParam({ name: 'taskId', description: 'Task ID' })
   @ApiResponse({ status: 200, description: 'Task returned' })
   @ApiResponse({ status: 404, description: 'Task not found' })
-  async findById(@Param('taskId') taskId: string) {
-    return this.taskService.findById(taskId);
+  async findById(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('taskId') taskId: string,
+  ) {
+    return this.taskService.findById(user.sub, tenantId, taskId);
   }
 
   @Patch(':taskId')
@@ -82,10 +92,12 @@ export class TaskController {
   @ApiResponse({ status: 404, description: 'Task not found' })
   @ApiResponse({ status: 400, description: 'Invalid status transition' })
   async update(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('taskId') taskId: string,
     @Body() dto: UpdateTaskDto,
   ) {
-    return this.taskService.update(taskId, dto);
+    return this.taskService.update(user.sub, tenantId, taskId, dto);
   }
 
   @Delete(':taskId')
@@ -94,8 +106,12 @@ export class TaskController {
   @ApiParam({ name: 'taskId', description: 'Task ID' })
   @ApiResponse({ status: 204, description: 'Task deleted' })
   @ApiResponse({ status: 404, description: 'Task not found' })
-  async delete(@Param('taskId') taskId: string) {
-    await this.taskService.delete(taskId);
+  async delete(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('taskId') taskId: string,
+  ) {
+    await this.taskService.delete(user.sub, tenantId, taskId);
   }
 
   // ── Assignment ─────────────────────────────────────────────
@@ -119,10 +135,12 @@ export class TaskController {
   @ApiResponse({ status: 200, description: 'Task assignees updated' })
   @ApiResponse({ status: 404, description: 'Task not found' })
   async assign(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('taskId') taskId: string,
     @Body('userIds') userIds: string[],
   ) {
-    return this.taskService.assign(taskId, userIds ?? []);
+    return this.taskService.assign(user.sub, tenantId, taskId, userIds ?? []);
   }
 
   // ── Position (Drag-drop) ───────────────────────────────────
@@ -144,11 +162,13 @@ export class TaskController {
   @ApiResponse({ status: 404, description: 'Task not found' })
   @ApiResponse({ status: 400, description: 'Invalid status transition' })
   async updatePosition(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('taskId') taskId: string,
     @Body('status') status: TaskStatus,
     @Body('sortOrder') sortOrder: number,
   ) {
-    return this.taskService.updatePosition(taskId, status, sortOrder);
+    return this.taskService.updatePosition(user.sub, tenantId, taskId, status, sortOrder);
   }
 
   // ── Subtask Tree ──────────────────────────────────────────
@@ -159,8 +179,12 @@ export class TaskController {
   @ApiParam({ name: 'taskId', description: 'Task ID' })
   @ApiResponse({ status: 200, description: 'Subtask tree returned' })
   @ApiResponse({ status: 404, description: 'Task not found' })
-  async getSubTaskTree(@Param('taskId') taskId: string) {
-    return this.taskService.getSubTaskTree(taskId);
+  async getSubTaskTree(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('taskId') taskId: string,
+  ) {
+    return this.taskService.getSubTaskTree(user.sub, tenantId, taskId);
   }
 
   // ── Batch Operations ──────────────────────────────────────
@@ -171,8 +195,12 @@ export class TaskController {
   @ApiBody({ type: BatchTaskDto })
   @ApiResponse({ status: 200, description: 'Batch operation completed' })
   @ApiResponse({ status: 404, description: 'One or more tasks not found' })
-  async batch(@Body() dto: BatchTaskDto) {
-    return this.taskService.batch(dto);
+  async batch(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Body() dto: BatchTaskDto,
+  ) {
+    return this.taskService.batch(user.sub, tenantId, dto);
   }
 
   // ── Relations ─────────────────────────────────────────────
@@ -183,8 +211,12 @@ export class TaskController {
   @ApiParam({ name: 'taskId', description: 'Task ID' })
   @ApiResponse({ status: 200, description: 'Task relations returned' })
   @ApiResponse({ status: 404, description: 'Task not found' })
-  async getRelations(@Param('taskId') taskId: string) {
-    return this.taskService.getRelations(taskId);
+  async getRelations(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('taskId') taskId: string,
+  ) {
+    return this.taskService.getRelations(user.sub, tenantId, taskId);
   }
 
   @Post(':taskId/relations')
@@ -195,10 +227,12 @@ export class TaskController {
   @ApiResponse({ status: 201, description: 'Relation created' })
   @ApiResponse({ status: 404, description: 'Task not found' })
   async addRelation(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('taskId') taskId: string,
     @Body() dto: CreateTaskRelationDto,
   ) {
-    return this.taskService.addRelation(taskId, dto);
+    return this.taskService.addRelation(user.sub, tenantId, taskId, dto);
   }
 
   // ── Task Templates ────────────────────────────────────────

@@ -4,7 +4,6 @@ import {
   SkillDefinition,
   SkillExecutionRequest,
   SkillExecutionResult,
-  MCPToolExecutionRequest,
 } from '../mcp/mcp.protocol';
 
 /**
@@ -75,6 +74,7 @@ export class SkillRegistry {
         skillId: request.skillId,
         success: false,
         error: `Skill "${request.skillId}" not found`,
+        status: 'failed',
         steps: [],
       };
     }
@@ -93,6 +93,7 @@ export class SkillRegistry {
         skillId: request.skillId,
         success: false,
         error: (err as Error).message,
+        status: 'failed',
         steps: [],
       };
     }

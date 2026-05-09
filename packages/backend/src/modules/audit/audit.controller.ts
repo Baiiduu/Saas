@@ -1,5 +1,6 @@
 import {
   Controller,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -15,6 +16,9 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Request } from 'express';
+import { CurrentTenant } from '../../common/decorators/current-tenant.decorator';
+import { RBAC } from '../../common/decorators/rbac.decorator';
+import { Role } from '@saas/shared-types';
 import { AuditService, AuditLogFilter } from './audit.service';
 
 @ApiTags('Audit')
@@ -38,8 +42,19 @@ export class AuditController {
   @ApiQuery({ name: 'sortBy', required: false, description: 'Sort field' })
   @ApiQuery({ name: 'sortOrder', required: false, description: 'Sort order (asc/desc)' })
   @ApiResponse({ status: 200, description: 'Audit logs returned' })
-  async query(@Query() query: AuditLogFilter) {
-    return this.auditService.query(query);
+  @RBAC(Role.ADMIN, Role.OWNER)
+  async query(
+    @CurrentTenant() tenantId: string,
+    @Query() query: AuditLogFilter,
+  ) {
+    if (query.tenantId && query.tenantId !== tenantId) {
+      throw new ForbiddenException('Cross-tenant audit access is not allowed');
+    }
+
+    return this.auditService.query({
+      ...query,
+      tenantId,
+    });
   }
 
   @Post('export')
@@ -54,7 +69,19 @@ export class AuditController {
   @ApiQuery({ name: 'dateFrom', required: false, description: 'Start date (ISO)' })
   @ApiQuery({ name: 'dateTo', required: false, description: 'End date (ISO)' })
   @ApiResponse({ status: 200, description: 'Exported audit logs' })
-  async export(@Req() req: Request, @Query() filter: any) {
-    return this.auditService.export(filter as AuditLogFilter);
+  @RBAC(Role.ADMIN, Role.OWNER)
+  async export(
+    @Req() req: Request,
+    @CurrentTenant() tenantId: string,
+    @Query() filter: any,
+  ) {
+    if (filter.tenantId && filter.tenantId !== tenantId) {
+      throw new ForbiddenException('Cross-tenant audit access is not allowed');
+    }
+
+    return this.auditService.export({
+      ...(filter as AuditLogFilter),
+      tenantId,
+    });
   }
 }

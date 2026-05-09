@@ -51,6 +51,19 @@ export function useCreateApprovalTemplate() {
   });
 }
 
+export function useProcessApprovalAction(id: string | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: Parameters<typeof approvalService.processApprovalAction>[1]) =>
+      approvalService.processApprovalAction(id!, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['approval', id] });
+      queryClient.invalidateQueries({ queryKey: ['approvals'] });
+    },
+  });
+}
+
 export function useApprovalTemplate(id: string | undefined) {
   return useQuery({
     queryKey: ['approval-template', id],

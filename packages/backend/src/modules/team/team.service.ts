@@ -13,6 +13,8 @@ import { AddMemberDto } from './dto/add-member.dto';
 import { JoinRequestDto } from './dto/join-request.dto';
 import { BatchInviteDto } from '../tenant/dto/batch-invite.dto';
 import { Role } from '@prisma/client';
+import { RbacService } from '../rbac/rbac.service';
+import { AuditService } from '../audit/audit.service';
 
 /** Simple prototype join-request record stored in-memory. */
 interface JoinRequestRecord {
@@ -34,7 +36,11 @@ export class TeamService {
    */
   private readonly joinRequests = new Map<string, JoinRequestRecord>();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly rbacService: RbacService,
+    private readonly auditService: AuditService,
+  ) {}
 
   // ── Helpers ─────────────────────────────────────────────────
 
@@ -45,8 +51,16 @@ export class TeamService {
   private async getCallerTeamRole(
     teamId: string,
     callerUserId: string | undefined,
+    tenantId?: string,
   ): Promise<Role | null> {
     if (!callerUserId) return null;
+    if (tenantId) {
+      return (await this.rbacService.getEffectiveTeamRole(
+        callerUserId,
+        tenantId,
+        teamId,
+      )) as Role | null;
+    }
     const membership = await this.prisma.teamMember.findUnique({
       where: {
         teamId_userId: {
@@ -62,16 +76,18 @@ export class TeamService {
   /**
    * Assert that the caller has at least ADMIN role in the team.
    */
-  private async assertAdminOrOwner(
+  private async assertLeaderOrAbove(
     teamId: string,
+    tenantId: string,
     callerUserId: string | undefined,
   ): Promise<void> {
-    const callerRole = await this.getCallerTeamRole(teamId, callerUserId);
-    if (callerRole !== Role.ADMIN && callerRole !== Role.OWNER) {
-      throw new ForbiddenException(
-        'Only team ADMIN or OWNER can perform this action',
-      );
+    if (!callerUserId) {
+      throw new ForbiddenException('Authentication required');
     }
+
+    await this.rbacService.assertPermission('member.manage', callerUserId, tenantId, {
+      teamId,
+    });
   }
 
   /**
@@ -97,6 +113,8 @@ export class TeamService {
    * Any tenant member can create a team.
    */
   async create(userId: string, tenantId: string, dto: CreateTeamDto) {
+    await this.rbacService.assertPermission('team.create', userId, tenantId);
+
     // Verify tenant exists
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -173,7 +191,11 @@ export class TeamService {
   }
 
   /** Find a team by its ID. */
-  async findById(id: string) {
+  async findById(userId: string, tenantId: string, id: string) {
+    await this.rbacService.assertPermission('team.read', userId, tenantId, {
+      resourceId: id,
+    });
+
     const team = await this.prisma.team.findUnique({
       where: { id },
       include: {
@@ -208,11 +230,10 @@ export class TeamService {
   }
 
   /** List teams. Optionally filter by tenant. */
-  async findAll(tenantId?: string) {
-    const where: any = { deletedAt: null };
-    if (tenantId) {
-      where.tenantId = tenantId;
-    }
+  async findAll(userId: string, tenantId: string) {
+    await this.rbacService.assertTenantAccess(userId, tenantId);
+
+    const where: any = { deletedAt: null, tenantId };
 
     return this.prisma.team.findMany({
       where,
@@ -234,7 +255,15 @@ export class TeamService {
   }
 
   /** Update a team's properties. */
-  async update(id: string, dto: UpdateTeamDto, _callerUserId?: string) {
+  async update(id: string, dto: UpdateTeamDto, callerUserId: string | undefined, tenantId: string) {
+    if (!callerUserId) {
+      throw new ForbiddenException('Authentication required');
+    }
+
+    await this.rbacService.assertPermission('team.update', callerUserId, tenantId, {
+      resourceId: id,
+    });
+
     const team = await this.prisma.team.findUnique({
       where: { id },
       select: { id: true, tenantId: true, deletedAt: true },
@@ -286,9 +315,14 @@ export class TeamService {
   }
 
   /** Soft-delete a team. Only ADMIN/OWNER can delete. */
-  async delete(id: string, callerUserId?: string) {
-    // Auth: only ADMIN/OWNER
-    await this.assertAdminOrOwner(id, callerUserId);
+  async delete(id: string, callerUserId: string | undefined, tenantId: string) {
+    if (!callerUserId) {
+      throw new ForbiddenException('Authentication required');
+    }
+
+    await this.rbacService.assertPermission('team.delete', callerUserId, tenantId, {
+      resourceId: id,
+    });
 
     const team = await this.prisma.team.findUnique({
       where: { id },
@@ -318,9 +352,20 @@ export class TeamService {
     userId: string,
     dto: AddMemberDto,
     callerUserId?: string,
+    tenantId?: string,
   ) {
-    // Auth: only ADMIN/OWNER
-    await this.assertAdminOrOwner(teamId, callerUserId);
+    if (!callerUserId || !tenantId) {
+      throw new ForbiddenException('Authentication required');
+    }
+
+    await this.rbacService.assertPermission('member.create', callerUserId, tenantId, {
+      teamId,
+    });
+
+    const callerRole = await this.getCallerTeamRole(teamId, callerUserId, tenantId);
+    if (callerRole === Role.LEADER && (dto.role === Role.ADMIN || dto.role === Role.OWNER)) {
+      throw new ForbiddenException('Team leader cannot assign ADMIN or OWNER roles');
+    }
 
     const team = await this.prisma.team.findUnique({
       where: { id: teamId },
@@ -401,9 +446,15 @@ export class TeamService {
     teamId: string,
     userId: string,
     callerUserId?: string,
+    tenantId?: string,
   ) {
-    // Auth: only ADMIN/OWNER
-    await this.assertAdminOrOwner(teamId, callerUserId);
+    if (!callerUserId || !tenantId) {
+      throw new ForbiddenException('Authentication required');
+    }
+
+    await this.rbacService.assertPermission('member.delete', callerUserId, tenantId, {
+      teamId,
+    });
 
     const member = await this.prisma.teamMember.findUnique({
       where: {
@@ -438,17 +489,18 @@ export class TeamService {
     userId: string,
     role: Role,
     callerUserId?: string,
+    tenantId?: string,
   ) {
-    // Verify team exists (Finding 5)
-    const tenantId = await this.findTeamTenantId(teamId);
-
-    // Auth: caller must be ADMIN or OWNER
-    const callerRole = await this.getCallerTeamRole(teamId, callerUserId);
-    if (callerRole !== Role.ADMIN && callerRole !== Role.OWNER) {
-      throw new ForbiddenException(
-        'Only team ADMIN or OWNER can change roles',
-      );
+    const resolvedTenantId = tenantId ?? await this.findTeamTenantId(teamId);
+    if (!callerUserId) {
+      throw new ForbiddenException('Authentication required');
     }
+
+    await this.rbacService.assertPermission('member.update', callerUserId, resolvedTenantId, {
+      teamId,
+    });
+
+    const callerRole = await this.getCallerTeamRole(teamId, callerUserId, resolvedTenantId);
 
     // Find target member
     const member = await this.prisma.teamMember.findUnique({
@@ -468,6 +520,16 @@ export class TeamService {
       throw new ForbiddenException(
         'Only an OWNER can change another OWNER\'s role',
       );
+    }
+
+    if (callerRole === Role.LEADER) {
+      if (member.role === Role.ADMIN || role === Role.ADMIN || role === Role.OWNER) {
+        throw new ForbiddenException('Team leader cannot manage ADMIN or OWNER roles');
+      }
+    }
+
+    if (callerRole === Role.ADMIN && role === Role.OWNER) {
+      throw new ForbiddenException('Only an OWNER can assign the OWNER role');
     }
 
     const updated = await this.prisma.teamMember.update({
@@ -491,11 +553,29 @@ export class TeamService {
     });
 
     this.logger.log(`User ${userId} role in team ${teamId} changed to ${role}`);
+
+    await this.auditService.append({
+      userId: callerUserId,
+      action: 'member.role.update',
+      resourceType: 'team',
+      resourceId: teamId,
+      tenantId: resolvedTenantId,
+      detail: {
+        targetUserId: userId,
+        previousRole: member.role,
+        nextRole: role,
+      },
+    });
+
     return updated;
   }
 
   /** Get a specific member of a team. */
-  async getMember(teamId: string, userId: string) {
+  async getMember(teamId: string, userId: string, callerUserId: string, tenantId: string) {
+    await this.rbacService.assertPermission('member.read', callerUserId, tenantId, {
+      teamId,
+    });
+
     const member = await this.prisma.teamMember.findUnique({
       where: {
         teamId_userId: {
@@ -523,7 +603,11 @@ export class TeamService {
   }
 
   /** List all members of a team. */
-  async getMembers(teamId: string) {
+  async getMembers(teamId: string, callerUserId: string, tenantId: string) {
+    await this.rbacService.assertPermission('member.read', callerUserId, tenantId, {
+      teamId,
+    });
+
     const team = await this.prisma.team.findUnique({
       where: { id: teamId },
       select: { id: true, deletedAt: true },
@@ -548,14 +632,72 @@ export class TeamService {
     });
   }
 
+  async resolveMembers(
+    teamId: string,
+    callerUserId: string,
+    tenantId: string,
+    query: string,
+    limit = 5,
+  ) {
+    await this.rbacService.assertPermission('member.read', callerUserId, tenantId, {
+      teamId,
+    });
+
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) {
+      return [];
+    }
+
+    const team = await this.prisma.team.findUnique({
+      where: { id: teamId },
+      select: { id: true, deletedAt: true },
+    });
+    if (!team || team.deletedAt) {
+      throw new NotFoundException('Team not found');
+    }
+
+    const safeLimit = Math.min(Math.max(limit, 1), 10);
+
+    return this.prisma.teamMember.findMany({
+      where: {
+        teamId,
+        user: {
+          deletedAt: null,
+          OR: [
+            { displayName: { contains: normalizedQuery, mode: 'insensitive' } },
+            { email: { contains: normalizedQuery, mode: 'insensitive' } },
+          ],
+        },
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            displayName: true,
+            avatar: true,
+          },
+        },
+      },
+      orderBy: { joinedAt: 'asc' },
+      take: safeLimit,
+    });
+  }
+
   // ── Archive / Unarchive ────────────────────────────────────
 
   /**
    * Archive or unarchive a team.
    * Only ADMIN/OWNER can archive/unarchive a team.
    */
-  async archive(teamId: string, isArchived: boolean, callerUserId?: string) {
-    await this.assertAdminOrOwner(teamId, callerUserId);
+  async archive(teamId: string, isArchived: boolean, callerUserId: string | undefined, tenantId: string) {
+    if (!callerUserId) {
+      throw new ForbiddenException('Authentication required');
+    }
+
+    await this.rbacService.assertPermission('team.update', callerUserId, tenantId, {
+      resourceId: teamId,
+    });
 
     const team = await this.prisma.team.findUnique({
       where: { id: teamId },
@@ -584,8 +726,15 @@ export class TeamService {
     teamId: string,
     visibility: 'PUBLIC' | 'PRIVATE',
     callerUserId?: string,
+    tenantId?: string,
   ) {
-    await this.assertAdminOrOwner(teamId, callerUserId);
+    if (!callerUserId || !tenantId) {
+      throw new ForbiddenException('Authentication required');
+    }
+
+    await this.rbacService.assertPermission('team.update', callerUserId, tenantId, {
+      resourceId: teamId,
+    });
 
     const team = await this.prisma.team.findUnique({
       where: { id: teamId },
@@ -610,13 +759,19 @@ export class TeamService {
    * Create a join request for a team.
    * Any authenticated user can request to join a team.
    */
-  async createJoinRequest(teamId: string, userId: string, dto: JoinRequestDto) {
+  async createJoinRequest(teamId: string, userId: string, dto: JoinRequestDto, tenantId: string) {
+    await this.rbacService.assertTenantAccess(userId, tenantId);
+
     const team = await this.prisma.team.findUnique({
       where: { id: teamId },
-      select: { id: true, deletedAt: true, visibility: true },
+      select: { id: true, tenantId: true, deletedAt: true, visibility: true },
     });
     if (!team || team.deletedAt) {
       throw new NotFoundException('Team not found');
+    }
+
+    if (team.tenantId !== tenantId) {
+      throw new ForbiddenException('Cross-tenant team access is not allowed');
     }
 
     // Check if user is already a member
@@ -668,8 +823,13 @@ export class TeamService {
     requestId: string,
     action: 'APPROVED' | 'REJECTED',
     callerUserId?: string,
+    tenantId?: string,
   ) {
-    await this.assertAdminOrOwner(teamId, callerUserId);
+    if (!callerUserId || !tenantId) {
+      throw new ForbiddenException('Authentication required');
+    }
+
+    await this.assertLeaderOrAbove(teamId, tenantId, callerUserId);
 
     const request = this.joinRequests.get(requestId);
     if (!request) {
@@ -746,8 +906,8 @@ export class TeamService {
   }
 
   /** List pending join requests for a team. */
-  async getJoinRequests(teamId: string, callerUserId?: string) {
-    await this.assertAdminOrOwner(teamId, callerUserId);
+  async getJoinRequests(teamId: string, callerUserId: string | undefined, tenantId: string) {
+    await this.assertLeaderOrAbove(teamId, tenantId, callerUserId);
 
     const requests: any[] = [];
     for (const record of this.joinRequests.values()) {
@@ -769,8 +929,15 @@ export class TeamService {
     teamId: string,
     dto: BatchInviteDto,
     callerUserId?: string,
+    tenantId?: string,
   ) {
-    await this.assertAdminOrOwner(teamId, callerUserId);
+    if (!callerUserId || !tenantId) {
+      throw new ForbiddenException('Authentication required');
+    }
+
+    await this.rbacService.assertPermission('member.create', callerUserId, tenantId, {
+      teamId,
+    });
 
     const team = await this.prisma.team.findUnique({
       where: { id: teamId },
@@ -852,7 +1019,9 @@ export class TeamService {
    * Leave a team (remove self from team).
    * Any member can leave a team. The OWNER cannot leave; they must transfer ownership first.
    */
-  async leaveTeam(teamId: string, userId: string) {
+  async leaveTeam(teamId: string, userId: string, tenantId: string) {
+    await this.rbacService.assertTenantAccess(userId, tenantId);
+
     const member = await this.prisma.teamMember.findUnique({
       where: {
         teamId_userId: { teamId, userId },
@@ -891,14 +1060,17 @@ export class TeamService {
     teamId: string,
     targetUserId: string,
     callerUserId?: string,
+    tenantId?: string,
   ) {
-    // Auth: only ADMIN/OWNER
-    const callerRole = await this.getCallerTeamRole(teamId, callerUserId);
-    if (callerRole !== Role.ADMIN && callerRole !== Role.OWNER) {
-      throw new ForbiddenException(
-        'Only team ADMIN or OWNER can remove members',
-      );
+    if (!callerUserId || !tenantId) {
+      throw new ForbiddenException('Authentication required');
     }
+
+    await this.rbacService.assertPermission('member.delete', callerUserId, tenantId, {
+      teamId,
+    });
+
+    const callerRole = await this.getCallerTeamRole(teamId, callerUserId, tenantId);
 
     const member = await this.prisma.teamMember.findUnique({
       where: {
@@ -916,6 +1088,10 @@ export class TeamService {
     }
 
     // ADMIN cannot remove OWNER or ADMIN
+    if (callerRole === Role.LEADER && (member.role === Role.ADMIN || member.role === Role.OWNER)) {
+      throw new ForbiddenException('Team leader cannot remove ADMINs or the OWNER');
+    }
+
     if (callerRole === Role.ADMIN && (member.role === Role.OWNER || member.role === Role.ADMIN)) {
       throw new ForbiddenException('ADMIN cannot remove other ADMINs or the OWNER');
     }

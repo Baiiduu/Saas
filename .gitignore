@@ -11,3 +11,4 @@ uploads/
 .pnpm-state/
 .pnpm-global/
 .pnpm-global-bin/
+.tmp/

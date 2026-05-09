@@ -18,6 +18,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { TenantOptional } from '../../common/decorators/tenant-optional.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { NotificationService } from './notification.service';
 import { QueryNotificationDto } from './dto/query-notification.dto';
@@ -25,6 +26,7 @@ import { NotificationType } from '@prisma/client';
 
 @ApiTags('Notification')
 @ApiBearerAuth('access-token')
+@TenantOptional()
 @Controller('notifications')
 export class NotificationController {
   constructor(private readonly notificationService: NotificationService) {}

@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RbacService } from '../rbac/rbac.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { QueryTaskDto } from './dto/query-task.dto';
@@ -26,14 +27,21 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
 export class TaskService {
   private readonly logger = new Logger(TaskService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly rbacService: RbacService,
+  ) {}
 
   // ── CRUD ────────────────────────────────────────────────────
 
   /**
    * Create a new task with optional assignees and tags.
    */
-  async create(userId: string, dto: CreateTaskDto) {
+  async create(userId: string, tenantId: string, dto: CreateTaskDto) {
+    await this.rbacService.assertPermission('task.create', userId, tenantId, {
+      teamId: dto.teamId,
+    });
+
     const { assigneeIds, tagNames, dueDate, parentTaskId, ...rest } = dto;
 
     const task = await this.prisma.task.create({
@@ -87,7 +95,7 @@ export class TaskService {
   /**
    * List tasks with pagination, filtering, and sorting.
    */
-  async findAll(query: QueryTaskDto) {
+  async findAll(userId: string, tenantId: string, query: QueryTaskDto) {
     const {
       page = 1,
       limit = 20,
@@ -105,7 +113,30 @@ export class TaskService {
     const where: any = { deletedAt: null };
 
     if (teamId) {
+      await this.rbacService.assertPermission('task.read', userId, tenantId, {
+        teamId,
+      });
       where.teamId = teamId;
+    } else {
+      const accessibleTeamIds = await this.rbacService.listAccessibleTeamIds(
+        userId,
+        tenantId,
+        'task.read',
+      );
+
+      if (accessibleTeamIds.length === 0) {
+        return {
+          items: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        };
+      }
+
+      where.teamId = { in: accessibleTeamIds };
     }
     if (status) {
       where.status = status;
@@ -190,7 +221,11 @@ export class TaskService {
   /**
    * Get a single task by ID with all relations.
    */
-  async findById(taskId: string) {
+  async findById(userId: string, tenantId: string, taskId: string) {
+    await this.rbacService.assertPermission('task.read', userId, tenantId, {
+      resourceId: taskId,
+    });
+
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
       include: {
@@ -243,7 +278,12 @@ export class TaskService {
   /**
    * Update task fields with status transition validation.
    */
-  async update(taskId: string, dto: UpdateTaskDto) {
+  async update(userId: string, tenantId: string, taskId: string, dto: UpdateTaskDto) {
+    await this.rbacService.assertPermission('task.update', userId, tenantId, {
+      resourceId: taskId,
+      ownership: 'creator_or_assignee',
+    });
+
     const existing = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: { id: true, status: true, deletedAt: true },
@@ -267,32 +307,98 @@ export class TaskService {
       data.dueDate = dto.dueDate ? new Date(dto.dueDate) : null;
     }
 
-    const updated = await this.prisma.task.update({
-      where: { id: taskId },
-      data,
-      include: {
-        assignees: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                email: true,
-                displayName: true,
-                avatar: true,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const updatedTask = await tx.task.update({
+        where: { id: taskId },
+        data,
+        include: {
+          assignees: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  email: true,
+                  displayName: true,
+                  avatar: true,
+                },
               },
             },
           },
-        },
-        tags: true,
-        creator: {
-          select: {
-            id: true,
-            email: true,
-            displayName: true,
-            avatar: true,
+          tags: true,
+          creator: {
+            select: {
+              id: true,
+              email: true,
+              displayName: true,
+              avatar: true,
+            },
           },
         },
-      },
+      });
+
+      const relationsChanged =
+        dto.assigneeIds !== undefined || dto.tagNames !== undefined;
+
+      if (dto.assigneeIds !== undefined) {
+        await tx.taskAssignee.deleteMany({ where: { taskId } });
+        if (dto.assigneeIds.length > 0) {
+          await tx.taskAssignee.createMany({
+            data: dto.assigneeIds.map((userId) => ({
+              taskId,
+              userId,
+            })),
+          });
+        }
+      }
+
+      if (dto.tagNames !== undefined) {
+        await tx.taskTag.deleteMany({ where: { taskId } });
+        if (dto.tagNames.length > 0) {
+          await tx.taskTag.createMany({
+            data: dto.tagNames.map((name) => ({
+              taskId,
+              name,
+            })),
+          });
+        }
+      }
+
+      if (!relationsChanged) {
+        return updatedTask;
+      }
+
+      const refreshed = await tx.task.findUnique({
+        where: { id: taskId },
+        include: {
+          assignees: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  email: true,
+                  displayName: true,
+                  avatar: true,
+                },
+              },
+            },
+          },
+          tags: true,
+          creator: {
+            select: {
+              id: true,
+              email: true,
+              displayName: true,
+              avatar: true,
+            },
+          },
+        },
+      });
+
+      if (!refreshed) {
+        throw new NotFoundException('Task not found');
+      }
+
+      return refreshed;
     });
 
     this.logger.log(`Task ${taskId} updated`);
@@ -302,7 +408,11 @@ export class TaskService {
   /**
    * Soft-delete a task by setting deletedAt.
    */
-  async delete(taskId: string) {
+  async delete(userId: string, tenantId: string, taskId: string) {
+    await this.rbacService.assertPermission('task.delete', userId, tenantId, {
+      resourceId: taskId,
+    });
+
     const existing = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: { id: true, deletedAt: true },
@@ -325,7 +435,11 @@ export class TaskService {
   /**
    * Replace task assignees with the given user IDs.
    */
-  async assign(taskId: string, userIds: string[]) {
+  async assign(userId: string, tenantId: string, taskId: string, userIds: string[]) {
+    await this.rbacService.assertPermission('task.assign', userId, tenantId, {
+      resourceId: taskId,
+    });
+
     const existing = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: { id: true, deletedAt: true },
@@ -383,10 +497,21 @@ export class TaskService {
   /**
    * Update task status and sort order (used after drag-drop).
    */
-  async updatePosition(taskId: string, status: TaskStatus, sortOrder: number) {
+  async updatePosition(
+    userId: string,
+    tenantId: string,
+    taskId: string,
+    status: TaskStatus,
+    sortOrder: number,
+  ) {
+    await this.rbacService.assertPermission('task.update', userId, tenantId, {
+      resourceId: taskId,
+      ownership: 'creator_or_assignee',
+    });
+
     const existing = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { id: true, status: true, deletedAt: true },
+      select: { id: true, status: true, deletedAt: true, teamId: true },
     });
 
     if (!existing || existing.deletedAt) {
@@ -398,32 +523,95 @@ export class TaskService {
       this.validateStatusTransition(existing.status, status);
     }
 
-    const updated = await this.prisma.task.update({
-      where: { id: taskId },
-      data: { status, sortOrder },
-      include: {
-        assignees: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                email: true,
-                displayName: true,
-                avatar: true,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const sourceTasks = await tx.task.findMany({
+        where: {
+          teamId: existing.teamId,
+          status: existing.status,
+          deletedAt: null,
+        },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      });
+
+      const targetTasks =
+        existing.status === status
+          ? sourceTasks
+          : await tx.task.findMany({
+              where: {
+                teamId: existing.teamId,
+                status,
+                deletedAt: null,
+              },
+              orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+            });
+
+      const movingTask = sourceTasks.find((task) => task.id === taskId);
+      if (!movingTask) {
+        throw new NotFoundException('Task not found');
+      }
+
+      const sourceWithoutMoving = sourceTasks.filter((task) => task.id !== taskId);
+      const nextTarget = [...targetTasks.filter((task) => task.id !== taskId)];
+      const boundedIndex = Math.max(0, Math.min(sortOrder, nextTarget.length));
+
+      if (existing.status === status) {
+        nextTarget.splice(boundedIndex, 0, movingTask);
+        await Promise.all(
+          nextTarget.map((task, index) =>
+            tx.task.update({
+              where: { id: task.id },
+              data: { sortOrder: index },
+            }),
+          ),
+        );
+      } else {
+        nextTarget.splice(boundedIndex, 0, movingTask);
+
+        await Promise.all([
+          ...sourceWithoutMoving.map((task, index) =>
+            tx.task.update({
+              where: { id: task.id },
+              data: { sortOrder: index },
+            }),
+          ),
+          ...nextTarget.map((task, index) =>
+            tx.task.update({
+              where: { id: task.id },
+              data:
+                task.id === taskId
+                  ? { status, sortOrder: index }
+                  : { sortOrder: index },
+            }),
+          ),
+        ]);
+      }
+
+      return tx.task.findUniqueOrThrow({
+        where: { id: taskId },
+        include: {
+          assignees: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  email: true,
+                  displayName: true,
+                  avatar: true,
+                },
               },
             },
           },
-        },
-        tags: true,
-        creator: {
-          select: {
-            id: true,
-            email: true,
-            displayName: true,
-            avatar: true,
+          tags: true,
+          creator: {
+            select: {
+              id: true,
+              email: true,
+              displayName: true,
+              avatar: true,
+            },
           },
         },
-      },
+      });
     });
 
     this.logger.log(`Task ${taskId} position updated: status=${status}, sortOrder=${sortOrder}`);
@@ -435,7 +623,11 @@ export class TaskService {
   /**
    * Recursively fetch the subtask tree for a given parent task.
    */
-  async getSubTaskTree(taskId: string): Promise<any> {
+  async getSubTaskTree(userId: string, tenantId: string, taskId: string): Promise<any> {
+    await this.rbacService.assertPermission('task.read', userId, tenantId, {
+      resourceId: taskId,
+    });
+
     const existing = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: { id: true, deletedAt: true },
@@ -475,7 +667,17 @@ export class TaskService {
   /**
    * Link a task to another resource (task / document / resource item).
    */
-  async addRelation(taskId: string, dto: CreateTaskRelationDto) {
+  async addRelation(
+    userId: string,
+    tenantId: string,
+    taskId: string,
+    dto: CreateTaskRelationDto,
+  ) {
+    await this.rbacService.assertPermission('task.update', userId, tenantId, {
+      resourceId: taskId,
+      ownership: 'creator_or_assignee',
+    });
+
     const existing = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: { id: true, deletedAt: true },
@@ -513,7 +715,11 @@ export class TaskService {
   /**
    * Get all relations for a given task.
    */
-  async getRelations(taskId: string) {
+  async getRelations(userId: string, tenantId: string, taskId: string) {
+    await this.rbacService.assertPermission('task.read', userId, tenantId, {
+      resourceId: taskId,
+    });
+
     const existing = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: { id: true, deletedAt: true },
@@ -546,13 +752,30 @@ export class TaskService {
    * Atomically update status / priority / assignees on multiple tasks.
    * Runs inside a Prisma transaction.
    */
-  async batchUpdate(ids: string[], data: {
+  async batchUpdate(
+    userId: string,
+    tenantId: string,
+    ids: string[],
+    data: {
     status?: TaskStatus;
     priority?: Priority;
     assigneeIds?: string[];
   }) {
     if (ids.length === 0) {
       return { updated: 0 };
+    }
+
+    const permission = data.assigneeIds !== undefined ? 'task.assign' : 'task.update';
+    const ownership =
+      permission === 'task.update'
+        ? 'creator_or_assignee' as const
+        : undefined;
+
+    for (const id of ids) {
+      await this.rbacService.assertPermission(permission, userId, tenantId, {
+        resourceId: id,
+        ownership,
+      });
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -610,9 +833,15 @@ export class TaskService {
   /**
    * Batch soft-delete multiple tasks.
    */
-  async batchDelete(ids: string[]) {
+  async batchDelete(userId: string, tenantId: string, ids: string[]) {
     if (ids.length === 0) {
       return { deleted: 0 };
+    }
+
+    for (const id of ids) {
+      await this.rbacService.assertPermission('task.delete', userId, tenantId, {
+        resourceId: id,
+      });
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -640,11 +869,11 @@ export class TaskService {
   /**
    * Dispatch a batch DTO to the correct batch operation.
    */
-  async batch(dto: BatchTaskDto) {
+  async batch(userId: string, tenantId: string, dto: BatchTaskDto) {
     if (dto.action === BatchAction.DELETE) {
-      return this.batchDelete(dto.ids);
+      return this.batchDelete(userId, tenantId, dto.ids);
     }
-    return this.batchUpdate(dto.ids, {
+    return this.batchUpdate(userId, tenantId, dto.ids, {
       status: dto.status,
       priority: dto.priority,
       assigneeIds: dto.assigneeIds,

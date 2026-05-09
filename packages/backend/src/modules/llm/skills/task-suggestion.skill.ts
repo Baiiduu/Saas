@@ -9,14 +9,7 @@ import {
 } from '../mcp/mcp.protocol';
 
 /**
- * TaskSuggestionSkill — suggests tasks based on context.
- *
- * Tool chain:
- *   1. "task.list" — fetch current user's tasks
- *   2. "dashboard.userStats" — fetch user stats
- *   3. "milestone.list" — fetch active milestones for context
- *
- * The skill generates task suggestions based on workload and priorities.
+ * TaskSuggestionSkill — suggests next actions based on tasks and team members.
  */
 @Injectable()
 export class TaskSuggestionSkill extends BaseSkill {
@@ -25,9 +18,9 @@ export class TaskSuggestionSkill extends BaseSkill {
   readonly definition: SkillDefinition = {
     id: 'task-suggestion',
     name: 'Task Suggestions',
-    description: 'Analyze current workload and suggest prioritised tasks or actions.',
-    requiredPermission: 'task:read',
-    toolChain: ['task.list', 'dashboard.userStats', 'milestone.list'],
+    description: 'Analyse current workload and suggest prioritised next actions.',
+    requiredPermission: 'llm.read',
+    toolChain: ['task.list', 'team.member.list'],
   };
 
   async execute(
@@ -35,64 +28,110 @@ export class TaskSuggestionSkill extends BaseSkill {
     toolRegistry: MCPToolRegistry,
   ): Promise<SkillExecutionResult> {
     const steps: SkillExecutionResult['steps'] = [];
-    const { teamId } = request.args as { teamId?: string };
+    const teamId = (request.args.teamId as string | undefined) ?? request.teamId;
 
-    // Step 1: Fetch current user's assigned tasks
+    if (!teamId) {
+      return {
+        skillId: request.skillId,
+        success: false,
+        error: 'Missing required argument: teamId',
+        status: 'failed',
+        steps: [],
+      };
+    }
+
     const tasksResult = await toolRegistry.execute({
       toolId: 'task.list',
-      args: { assigneeId: request.userId, status: 'IN_PROGRESS', limit: 50 },
+      args: {
+        assigneeId: request.userId,
+        teamId,
+        limit: 50,
+      },
       userId: request.userId,
       tenantId: request.tenantId,
       teamId,
+      sessionId: request.sessionId,
+      skillRunId: request.skillRunId,
     });
     steps.push({
       toolId: 'task.list',
       success: tasksResult.success,
+      status: tasksResult.status,
       result: tasksResult.data,
       error: tasksResult.error,
+      toolCallId: tasksResult.toolCallId,
+      requiresConfirmation: tasksResult.requiresConfirmation,
+      confirmationToken: tasksResult.confirmationToken,
     });
 
-    // Step 2: Fetch user dashboard stats
-    const statsResult = await toolRegistry.execute({
-      toolId: 'dashboard.userStats',
-      args: { userId: request.userId },
+    if (tasksResult.status === 'pending_confirmation') {
+      return {
+        skillId: request.skillId,
+        success: false,
+        status: 'pending_confirmation',
+        requiresConfirmation: true,
+        confirmationToken: tasksResult.confirmationToken,
+        steps,
+      };
+    }
+
+    const membersResult = await toolRegistry.execute({
+      toolId: 'team.member.list',
+      args: { teamId },
       userId: request.userId,
       tenantId: request.tenantId,
       teamId,
+      sessionId: request.sessionId,
+      skillRunId: request.skillRunId,
     });
     steps.push({
-      toolId: 'dashboard.userStats',
-      success: statsResult.success,
-      result: statsResult.data,
-      error: statsResult.error,
+      toolId: 'team.member.list',
+      success: membersResult.success,
+      status: membersResult.status,
+      result: membersResult.data,
+      error: membersResult.error,
+      toolCallId: membersResult.toolCallId,
+      requiresConfirmation: membersResult.requiresConfirmation,
+      confirmationToken: membersResult.confirmationToken,
     });
 
-    // Step 3: Fetch team milestones for context
-    const milestonesResult = await toolRegistry.execute({
-      toolId: 'milestone.list',
-      args: { teamId, limit: 10 },
-      userId: request.userId,
-      tenantId: request.tenantId,
-      teamId,
-    });
-    steps.push({
-      toolId: 'milestone.list',
-      success: milestonesResult.success,
-      result: milestonesResult.data,
-      error: milestonesResult.error,
-    });
+    if (membersResult.status === 'pending_confirmation') {
+      return {
+        skillId: request.skillId,
+        success: false,
+        status: 'pending_confirmation',
+        requiresConfirmation: true,
+        confirmationToken: membersResult.confirmationToken,
+        steps,
+      };
+    }
 
-    // Build suggestions
+    if (!tasksResult.success || !membersResult.success) {
+      return {
+        skillId: request.skillId,
+        success: false,
+        error: tasksResult.error ?? membersResult.error ?? 'Task suggestion skill failed',
+        status: 'failed',
+        steps,
+      };
+    }
+
     const tasks = tasksResult.success
       ? (tasksResult.data as { items?: Array<Record<string, unknown>> })?.items ?? []
       : [];
-    const stats = statsResult.success ? (statsResult.data as Record<string, unknown>) : null;
-    const milestones = milestonesResult.success
-      ? (milestonesResult.data as { items?: Array<Record<string, unknown>> })?.items ?? []
+    const members = membersResult.success
+      ? (membersResult.data as Array<Record<string, unknown>>) ?? []
       : [];
 
-    const overdueCount = (stats?.overdueCount as number) ?? 0;
-    const pendingCount = (stats?.pendingCount as number) ?? 0;
+    const overdueCount = tasks.filter(
+      (task) =>
+        task.dueDate &&
+        ['DONE', 'CLOSED'].indexOf(String(task.status ?? '')) === -1 &&
+        new Date(String(task.dueDate)) < new Date(),
+    ).length;
+    const pendingCount = tasks.filter((task) =>
+      ['TODO', 'IN_PROGRESS'].includes(String(task.status ?? '')),
+    ).length;
     const suggestions: string[] = [];
 
     if (overdueCount > 0) {
@@ -104,16 +143,19 @@ export class TaskSuggestionSkill extends BaseSkill {
     }
 
     if (tasks.length === 0 && pendingCount === 0) {
-      suggestions.push('You have no active tasks. Check the milestone backlog for new work items.');
+      suggestions.push('You have no active tasks. Coordinate with your team lead for the next priority item.');
     }
 
-    if (milestones.length > 0) {
-      const upcomingMilestones = milestones.filter(
-        (m: Record<string, unknown>) => m.status === 'pending',
+    if (members.length > 0) {
+      const otherMembers = members.filter(
+        (member) => (member.user as Record<string, unknown> | undefined)?.id !== request.userId,
       );
-      if (upcomingMilestones.length > 0) {
+      if (otherMembers.length > 0) {
         suggestions.push(
-          `Upcoming milestones: ${upcomingMilestones.map((m: Record<string, unknown>) => m.name as string).join(', ')}`,
+          `Potential collaborators: ${otherMembers
+            .slice(0, 3)
+            .map((member) => String((member.user as Record<string, unknown>)?.displayName ?? '未命名成员'))
+            .join(', ')}`,
         );
       }
     }
@@ -136,6 +178,7 @@ export class TaskSuggestionSkill extends BaseSkill {
     return {
       skillId: request.skillId,
       success: true,
+      status: 'completed',
       data: result,
       steps,
     };

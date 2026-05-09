@@ -1,5 +1,7 @@
 import React from 'react';
 import { Card, Tag, Avatar, Typography, Space, Tooltip } from 'antd';
+import { CSS } from '@dnd-kit/utilities';
+import { useSortable } from '@dnd-kit/sortable';
 import {
   UserOutlined,
   CalendarOutlined,
@@ -28,21 +30,46 @@ export interface TaskCardProps {
   task: ITask;
   onClick?: (task: ITask) => void;
   style?: React.CSSProperties;
+  sortable?: boolean;
 }
 
-const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, style }) => {
+const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, style, sortable = true }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: task.id,
+    disabled: !sortable,
+    data: {
+      type: 'task',
+      taskId: task.id,
+      status: task.status,
+    },
+  });
+
   const isOverdue =
     task.dueDate && new Date(task.dueDate) < new Date() && task.status !== TaskStatus.DONE && task.status !== TaskStatus.CLOSED;
 
   return (
     <Card
+      ref={setNodeRef}
       size="small"
       hoverable
       onClick={() => onClick?.(task)}
+      {...(sortable ? attributes : {})}
+      {...(sortable ? listeners : {})}
       style={{
         marginBottom: 8,
         cursor: 'pointer',
         borderLeft: `3px solid ${priorityConfig[task.priority]?.color === 'default' ? '#d9d9d9' : priorityConfig[task.priority]?.color || '#d9d9d9'}`,
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.55 : 1,
+        zIndex: isDragging ? 2 : 1,
         ...style,
       }}
       styles={{ body: { padding: 12 } }}

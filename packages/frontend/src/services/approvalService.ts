@@ -5,6 +5,7 @@ import type { PaginatedResponse } from '@/types';
 export interface GetApprovalsParams {
   status?: ApprovalStatus;
   creatorId?: string;
+  teamId?: string;
   page?: number;
   limit?: number;
 }
@@ -28,6 +29,17 @@ export function createApproval(data: {
   return post<IApproval>('/approvals', data);
 }
 
+export function processApprovalAction(
+  id: string,
+  data: {
+    action: 'APPROVE' | 'REJECT' | 'RETURN' | 'REDIRECT';
+    comment?: string;
+    targetNodeId?: string;
+  }
+): Promise<IApproval> {
+  return post<IApproval>(`/approvals/${id}/actions`, data);
+}
+
 export function getApprovalTemplates(
   teamId?: string
 ): Promise<
@@ -36,6 +48,7 @@ export function getApprovalTemplates(
     name: string;
     description: string;
     formFields: Record<string, unknown>;
+    nodes?: Array<{ id: string; name: string; approverType: string; sortOrder: number; config?: Record<string, unknown> }>;
   }>
 > {
   return get<
@@ -44,6 +57,7 @@ export function getApprovalTemplates(
       name: string;
       description: string;
       formFields: Record<string, unknown>;
+      nodes?: Array<{ id: string; name: string; approverType: string; sortOrder: number; config?: Record<string, unknown> }>;
     }>
   >('/approval-templates', { params: { ...(teamId ? { teamId } : {}) } });
 }

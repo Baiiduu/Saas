@@ -13,6 +13,7 @@ import {
 } from 'antd';
 import { PlusOutlined, DeleteOutlined, MinusCircleOutlined } from '@ant-design/icons';
 import { useCreateApprovalTemplate } from '@/hooks/useApprovals';
+import { useTeamMembers } from '@/hooks/useTenant';
 import { teamSubPath } from '@/router/routes';
 
 const { Text } = Typography;
@@ -57,6 +58,7 @@ const TemplateBuilder: React.FC<TemplateBuilderProps> = ({
   const [fields, setFields] = useState<FormField[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const createTemplate = useCreateApprovalTemplate();
+  const { data: members = [], isLoading: membersLoading } = useTeamMembers(teamId);
 
   const handleAddField = useCallback(() => {
     setFields((prev) => [
@@ -94,18 +96,23 @@ const TemplateBuilder: React.FC<TemplateBuilderProps> = ({
       }
 
       setSubmitting(true);
-      const formFieldsConfig: Record<string, unknown> = {};
-      validFields.forEach((f) => {
-        formFieldsConfig[f.key] = {
+      const formFieldsConfig = {
+        fields: validFields.map((f) => ({
+          name: f.key,
           label: f.label,
           type: f.type,
           required: f.required,
           options: f.type === 'select' ? f.options || [] : undefined,
-        };
-      });
+        })),
+      };
 
       const nodes = [
-        { name: '审批人', approverType: 'single', sortOrder: 1, config: {} },
+        {
+          name: '审批人',
+          approverType: values.defaultApproverIds?.length > 1 ? 'multiple' : 'single',
+          sortOrder: 1,
+          config: { approverIds: values.defaultApproverIds || [] },
+        },
       ];
 
       await createTemplate.mutateAsync({
@@ -168,6 +175,23 @@ const TemplateBuilder: React.FC<TemplateBuilderProps> = ({
           initialValue="general"
         >
           <Select options={SCOPE_OPTIONS} placeholder="选择适用范围" />
+        </Form.Item>
+
+        <Form.Item
+          name="defaultApproverIds"
+          label="默认接收审批人"
+          rules={[{ required: true, message: '请选择默认审批接收人' }]}
+        >
+          <Select
+            mode="multiple"
+            placeholder="选择审批默认接收人"
+            loading={membersLoading}
+            optionFilterProp="label"
+            options={members.map((member) => ({
+              label: member.displayName || member.email || member.userId,
+              value: member.userId,
+            }))}
+          />
         </Form.Item>
       </Form>
 

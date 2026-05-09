@@ -1,6 +1,6 @@
 import React from 'react';
 import { Navigate, Outlet } from 'react-router-dom';
-import { Result, Button } from 'antd';
+import { Result, Button, Spin } from 'antd';
 import { useAuthStore } from '@/stores/authStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { usePermission } from '@/hooks/usePermission';
@@ -59,10 +59,14 @@ export const PermissionGuard: React.FC<{
   redirectTo = ROUTES.TENANT.SELECT,
   children,
 }) => {
-  const { canAll, isAuthenticated } = usePermission();
+  const { canAll, isAuthenticated, isLoading } = usePermission();
 
   if (!isAuthenticated) {
     return <Navigate to={ROUTES.AUTH.LOGIN} replace />;
+  }
+
+  if (isLoading) {
+    return <Spin style={{ display: 'block', margin: '64px auto' }} />;
   }
 
   if (operations.length > 0 && !canAll(operations)) {

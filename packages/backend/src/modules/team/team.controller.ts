@@ -20,6 +20,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
+import { CurrentTenant } from '../../common/decorators/current-tenant.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtPayload } from '../auth/strategies/jwt.strategy';
 import { TeamService } from './team.service';
@@ -47,10 +48,11 @@ export class TeamController {
   @ApiResponse({ status: 409, description: 'Team name already exists in this tenant' })
   async create(
     @CurrentUser() user: JwtPayload,
-    @Query('tenantId') tenantId: string,
+    @CurrentTenant() tenantId: string,
+    @Query('tenantId') tenantIdQuery: string,
     @Body() dto: CreateTeamDto,
   ) {
-    return this.teamService.create(user.sub, tenantId, dto);
+    return this.teamService.create(user.sub, tenantId || tenantIdQuery, dto);
   }
 
   @Get()
@@ -58,8 +60,11 @@ export class TeamController {
   @ApiOperation({ summary: 'List teams, optionally filtered by tenant' })
   @ApiQuery({ name: 'tenantId', required: false, description: 'Filter by tenant ID' })
   @ApiResponse({ status: 200, description: 'List of teams returned' })
-  async findAll(@Query('tenantId') tenantId?: string) {
-    return this.teamService.findAll(tenantId);
+  async findAll(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+  ) {
+    return this.teamService.findAll(user.sub, tenantId);
   }
 
   @Get(':id')
@@ -68,8 +73,12 @@ export class TeamController {
   @ApiParam({ name: 'id', description: 'Team ID' })
   @ApiResponse({ status: 200, description: 'Team returned' })
   @ApiResponse({ status: 404, description: 'Team not found' })
-  async findById(@Param('id') id: string) {
-    return this.teamService.findById(id);
+  async findById(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('id') id: string,
+  ) {
+    return this.teamService.findById(user.sub, tenantId, id);
   }
 
   @Patch(':id')
@@ -80,10 +89,11 @@ export class TeamController {
   @ApiResponse({ status: 404, description: 'Team not found' })
   async update(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('id') id: string,
     @Body() dto: UpdateTeamDto,
   ) {
-    return this.teamService.update(id, dto, user.sub);
+    return this.teamService.update(id, dto, user.sub, tenantId);
   }
 
   @Delete(':id')
@@ -94,9 +104,10 @@ export class TeamController {
   @ApiResponse({ status: 404, description: 'Team not found' })
   async delete(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('id') id: string,
   ) {
-    await this.teamService.delete(id, user.sub);
+    await this.teamService.delete(id, user.sub, tenantId);
   }
 
   // ── Archive ─────────────────────────────────────────────────
@@ -116,10 +127,11 @@ export class TeamController {
   @ApiResponse({ status: 404, description: 'Team not found' })
   async archive(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('id') id: string,
     @Body('isArchived') isArchived: boolean,
   ) {
-    return this.teamService.archive(id, isArchived, user.sub);
+    return this.teamService.archive(id, isArchived, user.sub, tenantId);
   }
 
   // ── Visibility toggle ──────────────────────────────────────
@@ -139,10 +151,11 @@ export class TeamController {
   @ApiResponse({ status: 404, description: 'Team not found' })
   async setVisibility(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('id') id: string,
     @Body('visibility') visibility: 'PUBLIC' | 'PRIVATE',
   ) {
-    return this.teamService.setVisibility(id, visibility, user.sub);
+    return this.teamService.setVisibility(id, visibility, user.sub, tenantId);
   }
 
   // ── Members ─────────────────────────────────────────────────
@@ -153,8 +166,12 @@ export class TeamController {
   @ApiParam({ name: 'id', description: 'Team ID' })
   @ApiResponse({ status: 200, description: 'Members returned' })
   @ApiResponse({ status: 404, description: 'Team not found' })
-  async getMembers(@Param('id') id: string) {
-    return this.teamService.getMembers(id);
+  async getMembers(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
+    @Param('id') id: string,
+  ) {
+    return this.teamService.getMembers(id, user.sub, tenantId);
   }
 
   @Get(':id/members/:userId')
@@ -165,10 +182,12 @@ export class TeamController {
   @ApiResponse({ status: 200, description: 'Member returned' })
   @ApiResponse({ status: 404, description: 'Team or member not found' })
   async getMember(
+    @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('id') id: string,
     @Param('userId') userId: string,
   ) {
-    return this.teamService.getMember(id, userId);
+    return this.teamService.getMember(id, userId, user.sub, tenantId);
   }
 
   @Post(':id/members/:userId')
@@ -181,11 +200,12 @@ export class TeamController {
   @ApiResponse({ status: 409, description: 'User is already a member' })
   async addMember(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('id') id: string,
     @Param('userId') userId: string,
     @Body() dto: AddMemberDto,
   ) {
-    return this.teamService.addMember(id, userId, dto, user.sub);
+    return this.teamService.addMember(id, userId, dto, user.sub, tenantId);
   }
 
   @Patch(':id/members/:userId/role')
@@ -197,11 +217,12 @@ export class TeamController {
   @ApiResponse({ status: 404, description: 'Team or member not found' })
   async updateMemberRole(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('id') id: string,
     @Param('userId') userId: string,
     @Body() dto: UpdateMemberRoleDto,
   ) {
-    return this.teamService.updateMemberRole(id, userId, dto.role, user.sub);
+    return this.teamService.updateMemberRole(id, userId, dto.role, user.sub, tenantId);
   }
 
   // ── Join Requests ───────────────────────────────────────────
@@ -215,10 +236,11 @@ export class TeamController {
   @ApiResponse({ status: 409, description: 'Already a member or pending request exists' })
   async createJoinRequest(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('id') id: string,
     @Body() dto: JoinRequestDto,
   ) {
-    return this.teamService.createJoinRequest(id, user.sub, dto);
+    return this.teamService.createJoinRequest(id, user.sub, dto, tenantId);
   }
 
   @Get(':id/join-requests')
@@ -228,9 +250,10 @@ export class TeamController {
   @ApiResponse({ status: 200, description: 'Join requests returned' })
   async getJoinRequests(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('id') id: string,
   ) {
-    return this.teamService.getJoinRequests(id, user.sub);
+    return this.teamService.getJoinRequests(id, user.sub, tenantId);
   }
 
   @Patch(':id/join-requests/:requestId')
@@ -249,11 +272,12 @@ export class TeamController {
   @ApiResponse({ status: 404, description: 'Team or request not found' })
   async processJoinRequest(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('id') id: string,
     @Param('requestId') requestId: string,
     @Body('action') action: 'APPROVED' | 'REJECTED',
   ) {
-    return this.teamService.processJoinRequest(id, requestId, action, user.sub);
+    return this.teamService.processJoinRequest(id, requestId, action, user.sub, tenantId);
   }
 
   // ── Batch Invite ────────────────────────────────────────────
@@ -265,10 +289,11 @@ export class TeamController {
   @ApiResponse({ status: 200, description: 'Batch invite processed' })
   async batchInvite(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('id') id: string,
     @Body() dto: BatchInviteDto,
   ) {
-    return this.teamService.batchInvite(id, dto, user.sub);
+    return this.teamService.batchInvite(id, dto, user.sub, tenantId);
   }
 
   // ── Leave / Remove ─────────────────────────────────────────
@@ -281,9 +306,10 @@ export class TeamController {
   @ApiResponse({ status: 404, description: 'Not a member' })
   async leaveTeam(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('id') id: string,
   ) {
-    await this.teamService.leaveTeam(id, user.sub);
+    await this.teamService.leaveTeam(id, user.sub, tenantId);
   }
 
   @Delete(':id/members/:userId')
@@ -295,9 +321,10 @@ export class TeamController {
   @ApiResponse({ status: 404, description: 'Team or member not found' })
   async removeMemberWithCheck(
     @CurrentUser() user: JwtPayload,
+    @CurrentTenant() tenantId: string,
     @Param('id') id: string,
     @Param('userId') userId: string,
   ) {
-    await this.teamService.removeMemberWithCheck(id, userId, user.sub);
+    await this.teamService.removeMemberWithCheck(id, userId, user.sub, tenantId);
   }
 }

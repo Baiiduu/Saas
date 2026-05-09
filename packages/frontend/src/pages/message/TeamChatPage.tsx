@@ -25,17 +25,30 @@ import { io, Socket } from 'socket.io-client';
 import type { IMessage } from '@saas/shared-types';
 import { getMessages, sendMessage, searchMessages } from '@/services/messageService';
 import { getTasks } from '@/services/taskService';
-import { searchDocuments } from '@/services/documentService';
-import { teamPath } from '@/router/routes';
+import { getDocumentTree, searchDocuments } from '@/services/documentService';
+import { teamPath, teamSubPath } from '@/router/routes';
 import Loading from '@/components/common/Loading';
 import EmptyState from '@/components/common/EmptyState';
 import QuickTaskInput from '@/components/message/QuickTaskInput';
 import type { QuickRefItem } from '@/components/message/QuickTaskInput';
 import { useAuthStore } from '@/stores/authStore';
+import type { IDocument } from '@saas/shared-types';
 
 const { Title, Text } = Typography;
 
+const REFERENCE_PATTERN = /@\[(task|doc)\|([^\]]+)\]\(([^)]+)\)/g;
+
+interface MessageReference {
+  type: 'task' | 'doc';
+  resourceId: string;
+  label: string;
+  url?: string;
+}
+
 interface MessageWithSender extends IMessage {
+  metadata?: {
+    references?: MessageReference[];
+  };
   sender?: {
     id: string;
     email: string;
@@ -44,6 +57,17 @@ interface MessageWithSender extends IMessage {
     avatarUrl?: string;
   };
   reads?: Array<{ userId: string; readAt: string }>;
+}
+
+interface DocumentTreeItem extends IDocument {
+  children?: DocumentTreeItem[];
+}
+
+function flattenDocuments(items: DocumentTreeItem[]): DocumentTreeItem[] {
+  return items.flatMap((item) => [
+    item,
+    ...flattenDocuments(item.children ?? []),
+  ]);
 }
 
 const TeamChatPage: React.FC = () => {
@@ -55,6 +79,7 @@ const TeamChatPage: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [selectedRefs, setSelectedRefs] = useState<QuickRefItem[]>([]);
   const socketRef = useRef<Socket | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -176,32 +201,70 @@ const TeamChatPage: React.FC = () => {
     }
   }, [messages]);
 
+  const extractReferences = useCallback((content: string): MessageReference[] => {
+    const references: MessageReference[] = [];
+    const seen = new Set<string>();
+    let match: RegExpExecArray | null;
+
+    REFERENCE_PATTERN.lastIndex = 0;
+    while ((match = REFERENCE_PATTERN.exec(content)) !== null) {
+      const [, refType, label, resourceId] = match;
+      const type = refType === 'task' ? 'task' : 'doc';
+      const key = `${type}:${resourceId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      references.push({
+        type,
+        resourceId,
+        label,
+        url: type === 'task' ? `tasks/${resourceId}` : `documents/${resourceId}`,
+      });
+    }
+
+    selectedRefs.forEach((item) => {
+      const key = `${item.type}:${item.id}`;
+      if (seen.has(key)) return;
+      references.push({
+        type: item.type,
+        resourceId: item.id,
+        label: item.label,
+        url: item.type === 'task' ? `tasks/${item.id}` : `documents/${item.id}`,
+      });
+    });
+
+    return references;
+  }, [selectedRefs]);
+
   const handleSend = useCallback(async (content: string) => {
     if (!content || !teamId) return;
 
     setSending(true);
     try {
+      const references = extractReferences(content);
       if (socketRef.current?.connected) {
         // Send via WebSocket
         socketRef.current.emit('send_message', {
           teamId,
           content,
           type: 'TEXT',
+          references,
         });
         // Message arrives via message_sent event
         setInputValue('');
+        setSelectedRefs([]);
       } else {
         // Fallback to HTTP
-        const msg = await sendMessage(teamId, { content });
+        const msg = await sendMessage(teamId, { content, references });
         setMessages((prev) => [...prev, msg]);
         setInputValue('');
+        setSelectedRefs([]);
       }
     } catch {
       message.error('发送消息失败');
     } finally {
       setSending(false);
     }
-  }, [teamId]);
+  }, [teamId, extractReferences]);
 
   const handleScroll = useCallback(async () => {
     if (!listRef.current || !teamId) return;
@@ -233,15 +296,26 @@ const TeamChatPage: React.FC = () => {
   }, [orgId, teamId, navigate]);
 
   const handleReferenceSelect = useCallback((item: QuickRefItem) => {
-    message.info(`已引用${item.type === 'task' ? '任务' : '文档'}: ${item.label}`);
+    setSelectedRefs((prev) => {
+      if (prev.some((ref) => ref.type === item.type && ref.id === item.id)) {
+        return prev;
+      }
+      return [...prev, item];
+    });
+    message.success(`已引用${item.type === 'task' ? '任务' : '文档'}: ${item.label}`);
   }, []);
 
   const handleSearchRefs = useCallback(
     async (type: 'task' | 'doc', keyword: string): Promise<QuickRefItem[]> => {
-      if (!keyword || !teamId) return [];
+      if (!teamId) return [];
+      const normalizedKeyword = keyword.trim();
       try {
         if (type === 'task') {
-          const result = await getTasks({ search: keyword, teamId, limit: 10 });
+          const result = await getTasks({
+            ...(normalizedKeyword ? { search: normalizedKeyword } : {}),
+            teamId,
+            limit: 10,
+          });
           return (result.items || []).map((task) => ({
             id: task.id,
             type: 'task' as const,
@@ -249,8 +323,12 @@ const TeamChatPage: React.FC = () => {
             description: `任务: ${task.title}`,
           }));
         } else {
-          const docs = await searchDocuments(teamId, keyword);
-          return (docs || []).map((doc) => ({
+          const docs = normalizedKeyword
+            ? await searchDocuments(teamId, normalizedKeyword)
+            : flattenDocuments((await getDocumentTree(teamId)) as DocumentTreeItem[])
+                .filter((doc) => doc.type !== 'FOLDER')
+                .slice(0, 10);
+          return (docs || []).slice(0, 10).map((doc) => ({
             id: doc.id,
             type: 'doc' as const,
             label: doc.name,
@@ -265,6 +343,74 @@ const TeamChatPage: React.FC = () => {
   );
 
   const displayMessages = isSearching ? searchResults : (messages as MessageWithSender[]);
+
+  const renderReferenceCards = useCallback((msg: MessageWithSender) => {
+    const references = msg.metadata?.references ?? [];
+    if (references.length === 0) return null;
+
+    return (
+      <Space size={[8, 6]} wrap style={{ marginTop: 8 }}>
+        {references.map((ref) => (
+          <Tag
+            key={`${ref.type}:${ref.resourceId}`}
+            color={ref.type === 'task' ? 'green' : 'blue'}
+            style={{ cursor: 'pointer', padding: '3px 8px' }}
+            onClick={() => {
+              if (!orgId || !teamId) return;
+              navigate(teamSubPath(orgId, teamId, ref.url || (ref.type === 'task' ? `tasks/${ref.resourceId}` : `documents/${ref.resourceId}`)));
+            }}
+          >
+            {ref.type === 'task' ? '任务' : '文档'}：{ref.label}
+          </Tag>
+        ))}
+      </Space>
+    );
+  }, [navigate, orgId, teamId]);
+
+  const renderMessageContent = useCallback(
+    (content: string) => {
+      const parts: React.ReactNode[] = [];
+      let lastIndex = 0;
+      let match: RegExpExecArray | null;
+
+      REFERENCE_PATTERN.lastIndex = 0;
+      while ((match = REFERENCE_PATTERN.exec(content)) !== null) {
+        const [raw, refType, label, resourceId] = match;
+        const start = match.index;
+
+        if (start > lastIndex) {
+          parts.push(content.slice(lastIndex, start));
+        }
+
+        parts.push(
+          <a
+            key={`${resourceId}-${start}`}
+            onClick={() => {
+              if (!orgId || !teamId) return;
+              navigate(
+                teamSubPath(
+                  orgId,
+                  teamId,
+                  refType === 'task' ? `tasks/${resourceId}` : `documents/${resourceId}`,
+                ),
+              );
+            }}
+          >
+            {label}
+          </a>,
+        );
+
+        lastIndex = start + raw.length;
+      }
+
+      if (lastIndex < content.length) {
+        parts.push(content.slice(lastIndex));
+      }
+
+      return parts.length > 0 ? parts : content;
+    },
+    [navigate, orgId, teamId],
+  );
 
   if (!orgId || !teamId) return null;
 
@@ -406,9 +552,12 @@ const TeamChatPage: React.FC = () => {
                       </Space>
                     }
                     description={
-                      <Text style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>
-                        {msg.content}
-                      </Text>
+                      <div>
+                        <Text style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>
+                          {renderMessageContent(msg.content)}
+                        </Text>
+                        {renderReferenceCards(msg as MessageWithSender)}
+                      </div>
                     }
                   />
                 </List.Item>
@@ -430,6 +579,24 @@ const TeamChatPage: React.FC = () => {
         >
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
             <div style={{ flex: 1 }}>
+              {selectedRefs.length > 0 && (
+                <Space size={[6, 4]} wrap style={{ marginBottom: 6 }}>
+                  {selectedRefs.map((ref) => (
+                    <Tag
+                      key={`${ref.type}:${ref.id}`}
+                      closable
+                      color={ref.type === 'task' ? 'green' : 'blue'}
+                      onClose={() =>
+                        setSelectedRefs((prev) =>
+                          prev.filter((item) => !(item.type === ref.type && item.id === ref.id)),
+                        )
+                      }
+                    >
+                      已引用{ref.type === 'task' ? '任务' : '文档'}：{ref.label}
+                    </Tag>
+                  ))}
+                </Space>
+              )}
               <QuickTaskInput
                 value={inputValue}
                 onChange={setInputValue}

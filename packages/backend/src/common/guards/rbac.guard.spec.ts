@@ -5,13 +5,16 @@ import { RbacGuard } from './rbac.guard';
 
 describe('RbacGuard', () => {
   let guard: RbacGuard;
-  let mockReflector: { getAllAndOverride: jest.Mock };
+  let reflector: { getAllAndOverride: jest.Mock };
+  let rbacService: { hasTenantRole: jest.Mock };
 
   beforeEach(() => {
-    mockReflector = { getAllAndOverride: jest.fn() };
-    guard = new RbacGuard(mockReflector as any);
-    // Ensure non-strict mode for most tests
-    delete process.env.STRICT_RBAC_GUARD;
+    reflector = { getAllAndOverride: jest.fn() };
+    rbacService = { hasTenantRole: jest.fn() };
+    guard = new RbacGuard(
+      reflector as unknown as Reflector,
+      rbacService as any,
+    );
   });
 
   function createMockContext(request: any): any {
@@ -24,152 +27,61 @@ describe('RbacGuard', () => {
     };
   }
 
-  // ── No @RBAC() decorator ──────────────────────────────
+  it('allows access when no @RBAC decorator is present', async () => {
+    reflector.getAllAndOverride.mockReturnValue(undefined);
 
-  describe('no @RBAC() decorator', () => {
-    it('should allow access when no roles are required', () => {
-      mockReflector.getAllAndOverride.mockReturnValue(undefined);
-
-      const context = createMockContext({ user: { sub: 'u1', role: Role.MEMBER } });
-      const result = guard.canActivate(context);
-
-      expect(result).toBe(true);
-    });
-
-    it('should allow access when empty roles array', () => {
-      mockReflector.getAllAndOverride.mockReturnValue([]);
-
-      const context = createMockContext({ user: { sub: 'u1', role: Role.MEMBER } });
-      const result = guard.canActivate(context);
-
-      expect(result).toBe(true);
-    });
+    await expect(
+      guard.canActivate(createMockContext({ user: { sub: 'u1', role: Role.MEMBER } })),
+    ).resolves.toBe(true);
   });
 
-  // ── @RBAC() with matching role ────────────────────────
+  it('allows token-role fallback when no tenant context is present', async () => {
+    reflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
 
-  describe('@RBAC() with matching role', () => {
-    it('should allow when user has one of the required roles (exact match)', () => {
-      mockReflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
-
-      const context = createMockContext({ user: { sub: 'u1', role: Role.ADMIN } });
-      const result = guard.canActivate(context);
-
-      expect(result).toBe(true);
-    });
-
-    it('should allow when user has a higher role than required (hierarchy)', () => {
-      // OWNER (100) >= ADMIN (80)
-      mockReflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
-
-      const context = createMockContext({ user: { sub: 'u1', role: Role.OWNER } });
-      const result = guard.canActivate(context);
-
-      expect(result).toBe(true);
-    });
-
-    it('should allow when user has a role among multiple required using hierarchy', () => {
-      // OWNER (100) >= min(LEADER(60), ADMIN(80)) = 60
-      mockReflector.getAllAndOverride.mockReturnValue([Role.LEADER, Role.ADMIN]);
-
-      const context = createMockContext({ user: { sub: 'u1', role: Role.OWNER } });
-      const result = guard.canActivate(context);
-
-      expect(result).toBe(true);
-    });
+    await expect(
+      guard.canActivate(createMockContext({ user: { sub: 'u1', role: Role.OWNER } })),
+    ).resolves.toBe(true);
+    expect(rbacService.hasTenantRole).not.toHaveBeenCalled();
   });
 
-  // ── @RBAC() with insufficient role ────────────────────
+  it('delegates tenant-aware role checks to RbacService', async () => {
+    reflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
+    rbacService.hasTenantRole.mockResolvedValue(true);
 
-  describe('@RBAC() with insufficient role (non-strict mode)', () => {
-    it('should pass through in non-strict mode when user role is insufficient', () => {
-      // MEMBER (40) < ADMIN (80) — but non-strict falls through
-      mockReflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
+    const request = {
+      user: { sub: 'u1', role: Role.MEMBER },
+      tenantId: 'tenant-1',
+      params: { teamId: 'team-1' },
+    };
 
-      const context = createMockContext({ user: { sub: 'u1', role: Role.MEMBER } });
-      const result = guard.canActivate(context);
-
-      expect(result).toBe(true);
-    });
-
-    it('should pass through in non-strict mode when user has no role field', () => {
-      // No role field on user object → no synchronous check → falls through
-      mockReflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
-
-      const context = createMockContext({ user: { sub: 'u1' } });
-      const result = guard.canActivate(context);
-
-      expect(result).toBe(true);
-    });
+    await expect(guard.canActivate(createMockContext(request))).resolves.toBe(true);
+    expect(rbacService.hasTenantRole).toHaveBeenCalledWith(
+      'u1',
+      'tenant-1',
+      [Role.ADMIN],
+      'team-1',
+    );
   });
 
-  // ── Strict mode ───────────────────────────────────────
+  it('rejects authenticated users without sufficient tenant role', async () => {
+    reflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
+    rbacService.hasTenantRole.mockResolvedValue(false);
 
-  describe('strict mode (STRICT_RBAC_GUARD=true)', () => {
-    beforeEach(() => {
-      process.env.STRICT_RBAC_GUARD = 'true';
-    });
-
-    afterEach(() => {
-      delete process.env.STRICT_RBAC_GUARD;
-    });
-
-    it('should allow when user has sufficient role', () => {
-      mockReflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
-
-      const context = createMockContext({ user: { sub: 'u1', role: Role.ADMIN } });
-      const result = guard.canActivate(context);
-
-      expect(result).toBe(true);
-    });
-
-    it('should allow when user has higher role via hierarchy', () => {
-      mockReflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
-
-      const context = createMockContext({ user: { sub: 'u1', role: Role.OWNER } });
-      const result = guard.canActivate(context);
-
-      expect(result).toBe(true);
-    });
-
-    it('should throw ForbiddenException when user lacks sufficient role', () => {
-      mockReflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
-
-      const context = createMockContext({ user: { sub: 'u1', role: Role.MEMBER } });
-      expect(() => guard.canActivate(context)).toThrow(
-        new ForbiddenException('Insufficient permissions'),
-      );
-    });
-
-    it('should throw ForbiddenException when user has no role field', () => {
-      mockReflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
-
-      const context = createMockContext({ user: { sub: 'u1' } });
-      expect(() => guard.canActivate(context)).toThrow(
-        new ForbiddenException('Insufficient permissions'),
-      );
-    });
+    await expect(
+      guard.canActivate(
+        createMockContext({
+          user: { sub: 'u1', role: Role.MEMBER },
+          tenantId: 'tenant-1',
+        }),
+      ),
+    ).rejects.toThrow(new ForbiddenException('Insufficient permissions'));
   });
 
-  // ── Missing user ──────────────────────────────────────
+  it('rejects requests without an authenticated user', async () => {
+    reflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
 
-  describe('missing user', () => {
-    it('should throw ForbiddenException when user is missing from request', () => {
-      mockReflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
-
-      const context = createMockContext({});
-      expect(() => guard.canActivate(context)).toThrow(
-        new ForbiddenException('Authentication required for this resource'),
-      );
-    });
-
-    it('should throw ForbiddenException when user is null', () => {
-      mockReflector.getAllAndOverride.mockReturnValue([Role.ADMIN]);
-
-      const context = createMockContext({ user: null });
-      expect(() => guard.canActivate(context)).toThrow(
-        new ForbiddenException('Authentication required for this resource'),
-      );
-    });
+    await expect(guard.canActivate(createMockContext({}))).rejects.toThrow(
+      new ForbiddenException('Authentication required for this resource'),
+    );
   });
 });

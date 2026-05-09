@@ -79,7 +79,12 @@ export class MessageGateway
   @SubscribeMessage('send_message')
   async handleSendMessage(
     client: AuthenticatedSocket,
-    payload: { teamId: string; content: string; type?: string },
+    payload: {
+      teamId: string;
+      content: string;
+      type?: string;
+      references?: Array<{ type: 'task' | 'doc'; resourceId: string; label?: string }>;
+    },
   ): Promise<void> {
     if (!payload?.teamId || !payload?.content) {
       client.emit('error', { message: 'teamId and content are required' });
@@ -96,11 +101,13 @@ export class MessageGateway
         teamId: payload.teamId,
         content: payload.content,
         type: (payload.type as any) || 'TEXT',
+        references: payload.references ?? [],
       } as SendMessagePayload);
 
       // Broadcast to the team room (excluding sender)
       this.server
         .to(`team:${payload.teamId}`)
+        .except(client.id)
         .emit('new_message', message);
 
       // Also acknowledge to sender

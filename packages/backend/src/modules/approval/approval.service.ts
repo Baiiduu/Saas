@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RbacService } from '../rbac/rbac.service';
 import { ApprovalEngineService } from './approval-engine.service';
 import { ApprovalTemplateService } from './approval-template.service';
 import { CreateApprovalDto } from './dto/create-approval.dto';
@@ -79,6 +80,7 @@ export class ApprovalService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly rbacService: RbacService,
     private readonly engineService: ApprovalEngineService,
     private readonly templateService: ApprovalTemplateService,
   ) {}
@@ -93,7 +95,11 @@ export class ApprovalService {
    * 3. Set status to PENDING and currentSortOrder to the first node's sortOrder.
    * 4. Return the created approval with template nodes included.
    */
-  async create(userId: string, dto: CreateApprovalDto) {
+  async create(userId: string, tenantId: string, dto: CreateApprovalDto) {
+    await this.rbacService.assertPermission('approval.create', userId, tenantId, {
+      teamId: dto.teamId,
+    });
+
     const { templateId, formData, teamId } = dto;
 
     // Load template with ordered nodes
@@ -117,6 +123,7 @@ export class ApprovalService {
 
     const approval = await this.prisma.approval.create({
       data: {
+        title: dto.title?.trim() || template.name,
         templateId,
         formData,
         status: 'PENDING',
@@ -145,7 +152,7 @@ export class ApprovalService {
   /**
    * List approvals with pagination and optional filters: teamId, creatorId, status.
    */
-  async findAll(query: QueryApprovalDto) {
+  async findAll(userId: string, tenantId: string, query: QueryApprovalDto) {
     const {
       page = 1,
       limit = 20,
@@ -159,7 +166,28 @@ export class ApprovalService {
     const where: any = { deletedAt: null };
 
     if (teamId) {
+      await this.rbacService.assertPermission('approval.read', userId, tenantId, {
+        teamId,
+      });
       where.teamId = teamId;
+    } else {
+      const accessibleTeamIds = await this.rbacService.listAccessibleTeamIds(
+        userId,
+        tenantId,
+        'approval.read',
+      );
+
+      if (accessibleTeamIds.length === 0) {
+        return {
+          items: [],
+          total: 0,
+          page,
+          limit,
+          totalPages: 0,
+        };
+      }
+
+      where.teamId = { in: accessibleTeamIds };
     }
     if (creatorId) {
       where.creatorId = creatorId;
@@ -213,7 +241,11 @@ export class ApprovalService {
    * Get full approval detail including template (with nodes), creator,
    * action history (with processor info), and resolved current node.
    */
-  async findById(approvalId: string) {
+  async findById(userId: string, tenantId: string, approvalId: string) {
+    await this.rbacService.assertPermission('approval.read', userId, tenantId, {
+      resourceId: approvalId,
+    });
+
     const approval = await this.prisma.approval.findUnique({
       where: { id: approvalId },
       include: {
@@ -277,9 +309,26 @@ export class ApprovalService {
    * Otherwise, seed the three built-in templates (leave, expense, general)
    * with their respective nodes and return the newly created records.
    */
-  async getTemplates(userId: string, teamId?: string) {
+  async getTemplates(userId: string, tenantId: string, teamId?: string) {
+    if (teamId) {
+      await this.rbacService.assertPermission('approval.read', userId, tenantId, {
+        teamId,
+      });
+    }
+
+    const accessibleTeamIds = teamId
+      ? [teamId]
+      : await this.rbacService.listAccessibleTeamIds(userId, tenantId, 'approval.read');
+
+    if (accessibleTeamIds.length === 0) {
+      return [];
+    }
+
     const existing = await this.prisma.approvalTemplate.findMany({
-      where: { deletedAt: null },
+      where: {
+        deletedAt: null,
+        teamId: { in: accessibleTeamIds },
+      },
       include: { nodes: { orderBy: { sortOrder: 'asc' } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -330,14 +379,27 @@ export class ApprovalService {
   /**
    * Process an approval action via the engine.
    */
-  async processAction(userId: string, approvalId: string, dto: ApprovalActionDto) {
+  async processAction(
+    userId: string,
+    tenantId: string,
+    approvalId: string,
+    dto: ApprovalActionDto,
+  ) {
+    await this.rbacService.assertPermission('approval.approve', userId, tenantId, {
+      resourceId: approvalId,
+    });
+
     return this.engineService.processAction(userId, approvalId, dto);
   }
 
   /**
    * Get action history for an approval.
    */
-  async getActionHistory(approvalId: string) {
+  async getActionHistory(userId: string, tenantId: string, approvalId: string) {
+    await this.rbacService.assertPermission('approval.read', userId, tenantId, {
+      resourceId: approvalId,
+    });
+
     return this.engineService.getActionHistory(approvalId);
   }
 
@@ -346,31 +408,37 @@ export class ApprovalService {
   /**
    * Create a custom approval template with nodes.
    */
-  async createTemplate(userId: string, dto: CreateTemplateDto) {
-    return this.templateService.create(userId, dto);
+  async createTemplate(userId: string, tenantId: string, dto: CreateTemplateDto) {
+    await this.rbacService.assertPermission('approval.manage', userId, tenantId, {
+      teamId: dto.teamId,
+    });
+
+    return this.templateService.create(userId, tenantId, dto);
   }
 
   /**
    * Get a single template by ID.
    */
-  async getTemplateById(templateId: string) {
-    return this.templateService.findById(templateId);
+  async getTemplateById(userId: string, tenantId: string, templateId: string) {
+    return this.templateService.findById(userId, tenantId, templateId);
   }
 
   /**
    * Update template metadata.
    */
   async updateTemplate(
+    userId: string,
+    tenantId: string,
     templateId: string,
     data: { name?: string; description?: string; scope?: string; formFields?: Record<string, any> },
   ) {
-    return this.templateService.update(templateId, data);
+    return this.templateService.update(userId, tenantId, templateId, data);
   }
 
   /**
    * Soft-delete a template.
    */
-  async deleteTemplate(templateId: string) {
-    return this.templateService.remove(templateId);
+  async deleteTemplate(userId: string, tenantId: string, templateId: string) {
+    return this.templateService.remove(userId, tenantId, templateId);
   }
 }

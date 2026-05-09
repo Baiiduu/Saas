@@ -93,6 +93,16 @@ export interface IApproval {
   creatorId: string;
   teamId: string;
   currentProcessorId?: string;
+  template?: {
+    id: string;
+    name: string;
+  };
+  creator?: {
+    id: string;
+    email: string;
+    displayName: string;
+    avatar?: string | null;
+  };
   createdAt: string;
   updatedAt: string;
 }
@@ -141,6 +151,14 @@ export interface IMessage {
   senderId: string;
   teamId: string;
   replyToId?: string;
+  metadata?: {
+    references?: Array<{
+      type: 'task' | 'doc';
+      resourceId: string;
+      label: string;
+      url?: string;
+    }>;
+  };
   createdAt: string;
 }
 

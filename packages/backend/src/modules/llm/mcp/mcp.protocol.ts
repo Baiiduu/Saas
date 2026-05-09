@@ -17,6 +17,15 @@ export interface MCPToolParameter {
   enum?: string[];
 }
 
+export type MCPToolActionType = 'read' | 'write';
+export type MCPToolRiskLevel = 'low' | 'medium' | 'high';
+export type MCPExecutionStatus =
+  | 'pending'
+  | 'running'
+  | 'pending_confirmation'
+  | 'completed'
+  | 'failed';
+
 export interface MCPToolDefinition {
   /** Unique tool identifier (e.g. "task.list", "doc.search") */
   id: string;
@@ -26,8 +35,16 @@ export interface MCPToolDefinition {
   description: string;
   /** JSON Schema style parameters */
   parameters: MCPToolParameter[];
-  /** RBAC permission required to execute this tool (e.g. "task:read") */
+  /** RBAC permission required to execute this tool (e.g. "task.read") */
   requiredPermission: string;
+  /** Primary business resource touched by the tool */
+  resourceType: string;
+  /** Whether the tool only reads or performs writes */
+  actionType: MCPToolActionType;
+  /** Risk level used for confirmation and auditing */
+  riskLevel: MCPToolRiskLevel;
+  /** High-risk tools can require confirmation before the write is executed */
+  confirmationRequired?: boolean;
   /** Optional category grouping */
   category?: string;
 }
@@ -40,6 +57,10 @@ export interface MCPToolExecutionRequest {
   userId: string;
   tenantId: string;
   teamId?: string;
+  sessionId?: string;
+  skillRunId?: string;
+  toolCallId?: string;
+  confirmed?: boolean;
 }
 
 export interface MCPToolExecutionResult {
@@ -47,6 +68,11 @@ export interface MCPToolExecutionResult {
   data?: unknown;
   error?: string;
   executionTimeMs: number;
+  toolCallId?: string;
+  status?: MCPExecutionStatus;
+  requiresConfirmation?: boolean;
+  confirmationToken?: string;
+  riskLevel?: MCPToolRiskLevel;
 }
 
 // ── Context ───────────────────────────────────────────────────
@@ -69,8 +95,28 @@ export interface MCPContext {
 // ── Chat ──────────────────────────────────────────────────────
 
 export interface LLMChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  toolCallId?: string;
+  toolCalls?: LLMToolCall[];
+}
+
+export interface LLMToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+export interface LLMChatToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
 }
 
 export interface LLMChatRequest {
@@ -79,6 +125,9 @@ export interface LLMChatRequest {
   temperature?: number;
   maxTokens?: number;
   stream?: boolean;
+  tools?: LLMChatToolDefinition[];
+  toolChoice?: 'auto' | 'none';
+  systemPromptSuffix?: string;
 }
 
 export interface LLMChatResponse {
@@ -113,6 +162,8 @@ export interface SkillExecutionRequest {
   userId: string;
   tenantId: string;
   teamId?: string;
+  sessionId?: string;
+  skillRunId?: string;
 }
 
 export interface SkillExecutionResult {
@@ -120,10 +171,18 @@ export interface SkillExecutionResult {
   success: boolean;
   data?: unknown;
   error?: string;
+  skillRunId?: string;
+  status?: MCPExecutionStatus;
+  requiresConfirmation?: boolean;
+  confirmationToken?: string;
   steps: Array<{
     toolId: string;
     success: boolean;
+    status?: MCPExecutionStatus;
     result?: unknown;
     error?: string;
+    toolCallId?: string;
+    requiresConfirmation?: boolean;
+    confirmationToken?: string;
   }>;
 }
